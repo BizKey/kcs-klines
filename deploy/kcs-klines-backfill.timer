@@ -1,0 +1,15 @@
+[Unit]
+Description=Run the KuCoin klines collector twice a month (kcs-klines backfill)
+Documentation=https://github.com/OWNER/kcs-klines
+
+[Timer]
+# 02:17 on the 1st and the 15th of every month (UTC).
+OnCalendar=*-*-01,15 02:17:00
+# Catch up if the machine was asleep at the scheduled time.
+Persistent=true
+# Spread the load a little if several machines share an IP.
+RandomizedDelaySec=600
+Unit=kcs-klines-backfill.service
+
+[Install]
+WantedBy=timers.target

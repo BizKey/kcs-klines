@@ -1,0 +1,117 @@
+# kcs-klines — example configuration
+#
+# Copy to `kcs-klines.toml` (that filename is picked up automatically) or point
+# at it with `--config`. Every value below shows the built-in default unless
+# noted otherwise, so you can delete anything you do not want to override.
+
+[general]
+# Where the Parquet tree lives. A multi-gigabyte backfill writes a lot of small
+# files, so a local disk is a good idea.
+data_dir = "./data"
+
+# Per-series bookkeeping (discovered start of history, last run). Deliberately
+# outside `data_dir` so it is never uploaded to the dataset repository.
+state_dir = "./state"
+
+# KuCoin Spot REST endpoint. Use a regional host if you have one.
+base_url = "https://api.kucoin.com"
+
+# Per-request HTTP timeout.
+request_timeout_secs = 30
+
+# How many (symbol, timeframe) pairs are collected in parallel. The public rate
+# pool is the real bottleneck, so 4-8 is plenty; higher only wastes sockets.
+concurrency = 4
+
+# error | warn | info | debug | trace
+log_level = "info"
+
+[rate_limit]
+# KuCoin VIP0 "Public" pool: 2000 weight per 30 seconds.
+weight_limit = 2000
+window_secs = 30
+
+# Minimum spacing between two HTTP requests. `/api/v1/market/candles` weighs 3,
+# so 2000/30s allows ~22 requests per second; 50 ms keeps us well inside that.
+min_interval_ms = 50
+
+# Retries for 429 / 5xx / network failures, with exponential backoff.
+max_retries = 6
+base_backoff_ms = 500
+max_backoff_secs = 30
+
+[collection]
+# Symbol list. An empty list means: every pair the exchange lists (996 today,
+# and it grows with new listings), with no filtering of any kind — all quoted
+# currencies, leveraged tokens and delisted pairs included.
+#
+#   symbols = []                                  # everything
+#   symbols = ["BTC-USDT", "ETH-USDT"]            # a subset
+#
+# Either way a single scheduled `backfill` keeps everything in sync: pairs with no
+# local data are collected, the rest continue right after the last stored bar, and
+# what is already collected costs no requests at all.
+symbols = ["BTC-USDT", "ETH-USDT", "SOL-USDT"]
+
+# Timeframes. Supported: 1m 3m 5m 15m 30m 1h 2h 4h 6h 8h 12h 1d 1w 1mon.
+# `1mon` is a calendar month (28-31 days, labelled with the 1st at 00:00 UTC); the
+# collector steps it month by month and counts a missing month as one missing bar.
+# "Only finished bars" applies per timeframe: an hour for 1h, a month for 1mon, so a
+# monthly series never contains the month you are living in.
+timeframes = ["1m", "5m", "15m", "1h", "4h", "1d"]
+
+# Where history starts:
+#   "listing"      -> walk back until KuCoin stops returning candles
+#   "2019-01-01"   -> a fixed date (UTC)
+#   "1546300800"   -> unix seconds
+#   RFC 3339      -> "2019-01-01T00:00:00Z"
+start = "listing"
+
+# Bars re-read at the resume boundary. Because a still-forming bar is never stored,
+# this only matters if the exchange retroactively corrects recently closed bars;
+# 1 means "continue right after the last stored bar without re-reading it".
+overlap_candles = 1
+
+# Consecutive empty windows tolerated before the fallback probe decides that the
+# start of history has been reached. Only used when the (cheap) daily probe
+# cannot establish the floor.
+max_empty_windows = 3
+
+# Abort the run when the exchange serves a candle that violates OHLC invariants.
+# Kept false by default: such bars are rare (BTC-USDT 1h on 2017-11-29 has
+# high < low), they are stored verbatim and reported, because dropping them would
+# leave holes in the archive that do not exist upstream.
+strict_validation = false
+
+[storage]
+# Partition rule: "auto", "month", "year" or "single".
+#   auto -> 1m..30m: month, 1h..1d: year, 1w: single
+partition = "auto"
+
+# Per-timeframe overrides, e.g. keep hourly data in monthly files:
+# [storage.partition_overrides]
+# "1h" = "month"
+
+# Only zstd is implemented.
+compression = "zstd"
+zstd_level = 3
+
+# Rows per Parquet row group.
+max_row_group_rows = 65536
+
+# Quote-volume column (KuCoin calls it "turnover").
+include_turnover = true
+
+# Adds `symbol` and `timeframe` columns (dictionary encoded, so almost free) to
+# make a single file self-describing.
+include_metadata_columns = true
+
+[notifications]
+# Optional watchdog ping, e.g. a healthchecks.io URL. `/start` is pinged at the
+# beginning, the bare URL on success and `/fail` on failure.
+healthcheck_url = ""
+
+[logging]
+# Optional log file, appended with daily rotation. Useful for cron runs.
+# file = "./logs/kcs-klines.log"
+# file_level = "debug"

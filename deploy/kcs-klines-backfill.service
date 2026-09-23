@@ -1,0 +1,30 @@
+[Unit]
+Description=KuCoin klines collector (kcs-klines backfill)
+Documentation=https://github.com/OWNER/kcs-klines
+# The exchange has to be reachable before it is worth starting.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Adjust to your user and checkout path.
+User=%i
+WorkingDirectory=/home/%i/kcs-klines
+Environment=RUST_LOG=info
+# Optional environment overrides (KCS_DATA_DIR, ...).
+# EnvironmentFile=/home/%i/.config/kcs-klines.env
+# `backfill` is both the collector and the sync command: it continues right after the
+# last stored bar (what is already collected costs no request at all) and collects
+# pairs that have no local data yet, which is what `symbols = []` needs when the
+# exchange lists something new.
+ExecStart=/home/%i/kcs-klines/target/release/kcs-klines backfill
+# A full first backfill can take hours; raise this if you collect many symbols.
+TimeoutStartSec=12h
+Nice=10
+IOSchedulingClass=idle
+# Restart on failure so a transient network problem does not lose a month.
+Restart=on-failure
+RestartSec=5min
+
+[Install]
+WantedBy=default.target
