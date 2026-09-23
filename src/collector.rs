@@ -334,6 +334,24 @@ impl Collector {
                 None
             }
         };
+        // The cache is only a claim about the exchange, and the files can disprove
+        // it: bars sitting *older* than the cached floor mean the claim is simply
+        // wrong. In that case drop it and probe again, so a stale cache can never
+        // hide data that exists upstream.
+        let oldest_on_disk = covered.values().map(|(lo, _)| *lo).min();
+        if let (Some(cached), Some(on_disk)) = (scan_lo, oldest_on_disk) {
+            if on_disk < cached {
+                tracing::debug!(
+                    symbol,
+                    timeframe = tf.slug(),
+                    cached_floor = %format_ts(cached),
+                    oldest_on_disk = %format_ts(on_disk),
+                    "the cached history floor is stale, probing again"
+                );
+                scan_lo = configured.map(|ts| tf.align(ts).max(MIN_TIMESTAMP));
+                discovery = scan_lo.is_none();
+            }
+        }
 
         // Find where this pair's history actually begins. Walking **daily**
         // candles (1500 days per request, so ~4 calls for a decade) gives a far
@@ -550,7 +568,7 @@ impl Collector {
         self.flush_all(symbol, tf, &mut buffers, &mut covered, &mut report)?;
 
         if !self.dry_run {
-            let (first, last, _) = self.coverage_summary(&covered);
+            let (first, _, _) = self.coverage_summary(&covered);
             // Where history *really* starts is where the data starts: a pair may be
             // listed on the 19th while its first monthly bar only exists from the 1st
             // of the next month. Caching the actual first bar stops every later run
@@ -558,18 +576,6 @@ impl Collector {
             if let Some(lo) = first.or(scan_lo) {
                 state.history_start = Some(lo);
             }
-            state.last_run_unix = now_unix();
-            state.first_candle = first;
-            state.last_candle = last;
-            // Count the bars actually on disk (footer reads only) rather than the
-            // number of partition files.
-            state.total_candles = match self.store.total_rows(symbol, tf) {
-                Ok(rows) => rows,
-                Err(e) => {
-                    tracing::warn!(symbol, timeframe = tf.slug(), error = %e, "cannot count stored rows");
-                    state.total_candles
-                }
-            };
             if let Err(e) = self.state.save(symbol, tf, &state) {
                 tracing::warn!(symbol, timeframe = tf.slug(), error = %e, "cannot persist series state");
             }
@@ -1278,6 +1284,57 @@ mod tests {
             "the covered middle must be skipped, not re-fetched: {report:?}"
         );
         assert_eq!(report.first_candle, Some(jun1));
+    }
+
+    #[tokio::test]
+    async fn the_cached_floor_never_hides_data() {
+        // The cached floor may only make the scan look deeper. If the files hold
+        // bars older than it, the earlier value wins — a stale cache must never be
+        // able to hide data that is sitting on disk.
+        let h = harness(|_| {}).await;
+        let jan = at("2020-01-01");
+        let march = at("2020-03-01");
+        let period = h.collector.store().period_of(march, Timeframe::H1);
+        let stored: Vec<Candle> = (0..24).map(|i| candle(march + i * 3600, 1.0)).collect();
+        h.collector
+            .store()
+            .merge("BTC-USDT", Timeframe::H1, period, &stored)
+            .unwrap();
+        // The cache claims "nothing before June", which is later than the data.
+        h.collector
+            .state_store()
+            .save(
+                "BTC-USDT",
+                Timeframe::H1,
+                &crate::state::SeriesState {
+                    history_start: Some(at("2020-06-01")),
+                },
+            )
+            .unwrap();
+
+        // The exchange has hourly bars from January and "now" is 2 March.
+        mount_time(&h.server, at("2020-03-02")).await;
+        mount_exchange(
+            &h.server,
+            FakeExchange::new(FakeExchange::series(jan, 24 * 70, 1.0)),
+        )
+        .await;
+
+        let later = Collector::new(
+            h.collector.client().clone(),
+            h.collector.store().clone(),
+            h.collector.state_store().clone(),
+            h.cfg.clone(),
+        );
+        let report = later
+            .collect_series("BTC-USDT", Timeframe::H1)
+            .await
+            .unwrap();
+        assert_eq!(
+            report.first_candle,
+            Some(jan),
+            "the stale cache must not stop the scan above the data: {report:?}"
+        );
     }
 
     #[tokio::test]

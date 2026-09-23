@@ -425,48 +425,6 @@ async fn init_command(args: InitArgs) -> Result<ExitCode> {
 
 // ── logging ───────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
-mod logging_tests {
-    use super::*;
-
-    #[test]
-    fn explicit_verbosity_beats_the_environment() {
-        std::env::set_var("RUST_LOG", "error");
-        // Without flags the environment variable rules.
-        let from_env = console_filter("debug", false);
-        assert!(
-            from_env.to_string().contains("error") || from_env.to_string().is_empty(),
-            "expected the RUST_LOG filter, got {from_env}"
-        );
-        // With `-v`/`-q` the requested level wins regardless.
-        let from_flags = console_filter("debug", true);
-        assert!(
-            from_flags.to_string().contains("debug"),
-            "expected the flag level, got {from_flags}"
-        );
-        std::env::remove_var("RUST_LOG");
-
-        // With nothing set, the flags' level is used either way.
-        assert!(console_filter("trace", false).to_string().contains("trace"));
-    }
-}
-
-/// Build the console filter.
-///
-/// `-v`/`-q` are explicit, so they beat `RUST_LOG`; without them the environment
-/// variable is honoured, which is what shells, containers and unit files expect.
-/// (A stray `RUST_LOG=INFO` silently disabling `-vv` is a confusing way to spend
-/// an afternoon.)
-fn console_filter(level: &str, explicit_verbosity: bool) -> EnvFilter {
-    if !explicit_verbosity {
-        if let Some(filter) = EnvFilter::try_from_default_env().ok() {
-            return filter;
-        }
-    }
-    // Keep our own crate at the requested level and quieten noisy dependencies.
-    EnvFilter::new(format!("{level},kcs_klines={level},reqwest=warn"))
-}
-
 /// Install the tracing subscriber.
 ///
 /// The returned guard owns the non-blocking file writer and must stay alive for
@@ -521,4 +479,46 @@ fn init_logging(
         .with(file_layer)
         .init();
     Some(guard)
+}
+
+/// Build the console filter.
+///
+/// `-v`/`-q` are explicit, so they beat `RUST_LOG`; without them the environment
+/// variable is honoured, which is what shells, containers and unit files expect.
+/// (A stray `RUST_LOG=INFO` silently disabling `-vv` is a confusing way to spend
+/// an afternoon.)
+fn console_filter(level: &str, explicit_verbosity: bool) -> EnvFilter {
+    if !explicit_verbosity {
+        if let Ok(filter) = EnvFilter::try_from_default_env() {
+            return filter;
+        }
+    }
+    // Keep our own crate at the requested level and quieten noisy dependencies.
+    EnvFilter::new(format!("{level},kcs_klines={level},reqwest=warn"))
+}
+
+#[cfg(test)]
+mod logging_tests {
+    use super::*;
+
+    #[test]
+    fn explicit_verbosity_beats_the_environment() {
+        std::env::set_var("RUST_LOG", "error");
+        // Without flags the environment variable rules.
+        let from_env = console_filter("debug", false);
+        assert!(
+            from_env.to_string().contains("error") || from_env.to_string().is_empty(),
+            "expected the RUST_LOG filter, got {from_env}"
+        );
+        // With `-v`/`-q` the requested level wins regardless.
+        let from_flags = console_filter("debug", true);
+        assert!(
+            from_flags.to_string().contains("debug"),
+            "expected the flag level, got {from_flags}"
+        );
+        std::env::remove_var("RUST_LOG");
+
+        // With nothing set, the flags' level is used either way.
+        assert!(console_filter("trace", false).to_string().contains("trace"));
+    }
 }

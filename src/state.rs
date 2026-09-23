@@ -14,24 +14,23 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Error, Result};
 use crate::kucoin::Timeframe;
 
-/// Facts learned about one `(symbol, timeframe)` series.
+/// The one fact about a series that the Parquet files cannot tell us.
+///
+/// Everything else about what is stored — bar counts, ranges, coverage per
+/// partition — is read from the Parquet footers, so it is deliberately not
+/// duplicated here. What files cannot express is *"nothing older than this
+/// exists upstream"*, which is a measurement made by probing the exchange
+/// (~4 requests). Caching it is the difference between a repeat run costing
+/// nothing and costing those probes again, every time, for every series.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct SeriesState {
-    /// Oldest timestamp that exists upstream (estimated from an empty response).
+    /// Oldest bar this pair has upstream, as verified by a probe.
+    ///
+    /// The collector never trusts it over the data: if the files hold bars older
+    /// than this, the earlier value wins. A stale cache can therefore only ever
+    /// make the scan look *deeper*, never hide data.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub history_start: Option<i64>,
-    /// Unix seconds of the last successful run.
-    #[serde(default)]
-    pub last_run_unix: i64,
-    /// Oldest bar currently stored.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub first_candle: Option<i64>,
-    /// Newest bar currently stored.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_candle: Option<i64>,
-    /// Total bars stored.
-    #[serde(default)]
-    pub total_candles: u64,
 }
 
 /// Reads and writes [`SeriesState`] files.
@@ -122,10 +121,6 @@ mod tests {
 
         let state = SeriesState {
             history_start: Some(1_500_000_000),
-            last_run_unix: 1_700_000_000,
-            first_candle: Some(1_500_000_000),
-            last_candle: Some(1_700_000_000),
-            total_candles: 42,
         };
         store.save("BTC-USDT", Timeframe::M1, &state).unwrap();
         assert_eq!(store.load("BTC-USDT", Timeframe::M1).unwrap(), state);

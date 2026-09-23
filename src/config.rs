@@ -46,7 +46,11 @@ pub struct Config {
 pub struct GeneralConfig {
     /// Where Parquet files live.
     pub data_dir: PathBuf,
-    /// Where per-series state (history start, last run) lives.
+    /// Where the cached history floor of each series lives.
+    ///
+    /// One number per series: the oldest bar the exchange has. Everything else is
+    /// read from the Parquet files, and the cache is dropped if the files contradict
+    /// it.
     pub state_dir: PathBuf,
     /// KuCoin REST base URL.
     pub base_url: String,

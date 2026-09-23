@@ -238,8 +238,20 @@ One command covers both jobs: `backfill` collects a pair that has nothing on dis
 merely extends the ones that do, so it is what you schedule. A pair listed last week
 is picked up on the next run with no extra configuration.
 
-State (discovered start of history, last run, row counts) lives in `state_dir`
-outside `data_dir`, so the data directory contains nothing but Parquet.
+### What `state_dir` is (and is not)
+
+Everything about what is stored is read from the Parquet files: their footers give
+the bars, the range and the coverage per partition, which is how `backfill` decides
+what to fetch, how `status` builds its table and how `verify` checks integrity.
+
+The single thing files cannot express is *"nothing older than this exists
+upstream"* — that is a measurement made by probing the exchange with daily candles
+(~4 requests per series). `state_dir` caches exactly that one number per series, so
+a repeat run costs no requests instead of re-probing every series every time
+(measured: 0 requests with the cache, 4 without, per series per run).
+
+It is never trusted over the data: if the files hold bars *older* than the cached
+floor, the cache is provably wrong, is dropped and the floor is probed again.
 
 ---
 
