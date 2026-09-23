@@ -346,3 +346,6 @@ field order, range semantics, weekly grid alignment, and deep history.
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+hf download Kizyanov/kcs-klines --repo-type dataset --local-dir ./data
+hf upload Kizyanov/kcs-klines ./data . --type dataset --commit-message "Update KuCoin klines $(date -u +%Y-%m-%d)"
