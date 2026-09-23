@@ -11,7 +11,6 @@ target
 
 # kcs-klines runtime artifacts
 /data/
-/state/
 /logs/
 kcs-klines.toml
 *.tmp-parquet

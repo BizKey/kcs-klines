@@ -26,6 +26,13 @@ pub struct SeriesStatus {
     pub first: Option<i64>,
     /// Newest bar.
     pub last: Option<i64>,
+    /// Oldest bar this pair has upstream, as recorded in the data itself.
+    ///
+    /// Written into the Parquet footer of the series, so it survives moving the
+    /// directory to another machine. `None` means the data does not say yet (a
+    /// directory written before floors were recorded); the next run learns it and
+    /// stores it.
+    pub history_floor: Option<i64>,
     /// Where the next run resumes: the bar right after the last stored one.
     ///
     /// Only finished bars are ever written, so the series always ends on a complete
@@ -168,11 +175,10 @@ pub fn series_status_at(
     tf: Timeframe,
     now: i64,
 ) -> Result<SeriesStatus> {
-    let files = store.scan_series(symbol, tf)?;
-    let bars: u64 = files.iter().map(|f| f.rows.max(0) as u64).sum();
-    let first = files.iter().map(|f| f.min).min();
-    let last = files.iter().map(|f| f.max).max();
-    let bytes = files
+    let scan = store.scan(symbol, tf)?;
+    let last = scan.files.iter().map(|f| f.max).max();
+    let bytes = scan
+        .files
         .iter()
         .filter_map(|f| std::fs::metadata(&f.path).ok())
         .map(|m| m.len())
@@ -180,10 +186,11 @@ pub fn series_status_at(
     Ok(SeriesStatus {
         symbol: symbol.to_string(),
         timeframe: tf,
-        files: files.len(),
-        bars,
-        first,
+        files: scan.files.len(),
+        bars: scan.rows(),
+        first: scan.oldest(),
         last,
+        history_floor: scan.floor,
         next_sync_from: last.map(|last| resume_point(tf, last, now)),
         bytes,
     })
@@ -283,7 +290,7 @@ mod tests {
             .map(|i| candle(start + i * iv, 1.0 + i as f64))
             .collect();
         let period = s.period_of(start, tf);
-        s.merge(symbol, tf, period, &candles).unwrap();
+        s.merge(symbol, tf, period, &candles, None).unwrap();
     }
 
     #[test]

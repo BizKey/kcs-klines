@@ -46,12 +46,6 @@ pub struct Config {
 pub struct GeneralConfig {
     /// Where Parquet files live.
     pub data_dir: PathBuf,
-    /// Where the cached history floor of each series lives.
-    ///
-    /// One number per series: the oldest bar the exchange has. Everything else is
-    /// read from the Parquet files, and the cache is dropped if the files contradict
-    /// it.
-    pub state_dir: PathBuf,
     /// KuCoin REST base URL.
     pub base_url: String,
     /// Per-request HTTP timeout in seconds.
@@ -66,7 +60,6 @@ impl Default for GeneralConfig {
     fn default() -> Self {
         GeneralConfig {
             data_dir: PathBuf::from("./data"),
-            state_dir: PathBuf::from("./state"),
             base_url: "https://api.kucoin.com".to_string(),
             request_timeout_secs: 30,
             concurrency: 4,
@@ -331,14 +324,10 @@ impl Config {
     }
 
     /// Environment overrides applied after loading:
-    /// `KCS_DATA_DIR`, `KCS_STATE_DIR`, `KCS_BASE_URL`, `KCS_CONCURRENCY`,
-    /// `KCS_LOG_LEVEL`.
+    /// `KCS_DATA_DIR`, `KCS_BASE_URL`, `KCS_CONCURRENCY`, `KCS_LOG_LEVEL`.
     pub fn apply_env_overrides(&mut self) {
         if let Ok(v) = std::env::var("KCS_DATA_DIR") {
             self.general.data_dir = PathBuf::from(v);
-        }
-        if let Ok(v) = std::env::var("KCS_STATE_DIR") {
-            self.general.state_dir = PathBuf::from(v);
         }
         if let Ok(v) = std::env::var("KCS_BASE_URL") {
             self.general.base_url = v;
@@ -398,7 +387,6 @@ mod tests {
         let text = r#"
 [general]
 data_dir = "/srv/kcs/data"
-state_dir = "/srv/kcs/state"
 concurrency = 8
 log_level = "debug"
 

@@ -117,11 +117,17 @@ needed: every endpoint used is public market data.
   footer statistics, so a second backfill does not re-request periods it already
   holds. In practice a repeat run of a 5-year hourly series costs **1 request**
   instead of 34.
-* **Exact start of history.** Walking *daily* candles (1500 days per request)
-  finds the pair's listing date in ~4 calls — for `BTC-USDT` it resolves to
-  `2017-10-19`. A fallback probe with exponentially growing steps handles
-  instruments with no daily series, and it never stops early at a long delisting
-  gap without confirming that nothing older exists.
+* **Exact start of history, recorded in the data.** A pair with nothing on disk is
+  probed with *daily* candles (1500 days per request, ~4 calls for a decade) to
+  find where it was listed. A series that already has data needs no probe at all:
+  covered periods cost nothing, so the walk simply continues down and confirms the
+  bottom itself, probing deeper in exponentially growing steps so a long delisting
+  gap cannot silently truncate history. The answer is then written into the Parquet
+  footer of the series, which is why a repeat run — on this machine or on any other
+  — costs **zero** requests. Measured on the real pair: the daily series of
+  `BTC-USDT` starts `2017-10-19`, while its hourly series really begins
+  `2017-10-04 04:00` with 27 sparse bars in between; trusting the probe over the
+  data would have hidden them.
 * **Merge, never truncate.** Files are rewritten only when their content changes;
   on a timestamp collision the fresh bar wins, which is how a candle that was
   still forming last run gets corrected.
@@ -168,6 +174,16 @@ Verified independently with DuckDB: Zstd on every column, footer statistics on
 `time` (which the collector uses for its coverage checks), and no duplicate or
 out-of-order timestamps.
 
+Each file also carries one footer key/value pair, `kcs.history_start`: the oldest
+bar the exchange has for that pair, i.e. how far back the archive has been
+verified (see [Where the history floor lives](#where-the-history-floor-lives)).
+Nothing else about a series lives outside `data/`.
+
+```sql
+SELECT file_name, value FROM parquet_kv_metadata('data/kucoin/spot/BTC-USDT/1h/2017.parquet')
+WHERE key = 'kcs.history_start';
+```
+
 ---
 
 ## Commands
@@ -212,8 +228,8 @@ set of bars is *identical* to the exchange's (1708/1708 for the holey Oct–Dec
 
 `kcs-klines.toml` is picked up automatically; see
 [`kcs-klines.example.toml`](kcs-klines.example.toml) for every option with
-comments. Env overrides: `KCS_DATA_DIR`, `KCS_STATE_DIR`, `KCS_BASE_URL`,
-`KCS_CONCURRENCY`, `KCS_LOG_LEVEL`, `KCS_KLINES_CONFIG`.
+comments. Env overrides: `KCS_DATA_DIR`, `KCS_BASE_URL`, `KCS_CONCURRENCY`,
+`KCS_LOG_LEVEL`, `KCS_KLINES_CONFIG`.
 
 Supported timeframes: `1m` `3m` `5m` `15m` `30m` `1h` `2h` `4h` `6h` `8h` `12h`
 `1d` `1w` `1mon`.
@@ -238,20 +254,39 @@ One command covers both jobs: `backfill` collects a pair that has nothing on dis
 merely extends the ones that do, so it is what you schedule. A pair listed last week
 is picked up on the next run with no extra configuration.
 
-### What `state_dir` is (and is not)
+### Where the history floor lives
 
 Everything about what is stored is read from the Parquet files: their footers give
 the bars, the range and the coverage per partition, which is how `backfill` decides
 what to fetch, how `status` builds its table and how `verify` checks integrity.
 
-The single thing files cannot express is *"nothing older than this exists
-upstream"* — that is a measurement made by probing the exchange with daily candles
-(~4 requests per series). `state_dir` caches exactly that one number per series, so
-a repeat run costs no requests instead of re-probing every series every time
-(measured: 0 requests with the cache, 4 without, per series per run).
+One fact cannot be derived from bar counts alone: *"nothing older than this exists
+upstream"*. A missing file means either "never collected" or "the pair was not
+listed yet", and no amount of reading the archive tells the two apart — so the
+collector measures it once (by walking down to the bottom, or by probing daily
+candles for a pair with nothing on disk) and records the answer **in the data**:
+every Parquet file carries `kcs.history_start` in its footer key/value metadata.
 
-It is never trusted over the data: if the files hold bars *older* than the cached
-floor, the cache is provably wrong, is dropped and the floor is probed again.
+That is deliberate. Nothing about a series lives outside `data/`, so the knowledge
+survives copying the directory to another machine or pushing it to a dataset
+repository: a fresh host that downloads `data/` spends **zero** requests on
+re-learning it.
+
+```bash
+# Which series still don't say how deep their history goes?
+kcs-klines status --json | jq -r '.series[] | select(.history_floor == null) | .symbol'
+```
+
+A directory written before this existed is migrated automatically: the next run
+walks down, learns the floor and stamps it into the series' oldest file. That costs
+~1–3 requests and one footer rewrite **per series, once** — after which every later
+run, on any machine, is free (measured: 0 requests for a repeat run of a migrated
+series, and `backfill` + `verify` agree bar for bar afterwards).
+
+The record is never trusted over the data: if the files hold bars *older* than the
+recorded floor, the record is provably wrong, is ignored and the walk continues
+deeper. A `--start` bounds where a run *looks*, so it proves nothing about what lies
+deeper and never loosens a recorded floor.
 
 ---
 

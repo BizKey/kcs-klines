@@ -3,6 +3,11 @@
 //! Files are written with Zstd compression and chunk-level statistics, which is
 //! what lets the collector answer "how far does this file go?" by reading only
 //! the footer instead of the whole file.
+//!
+//! The footer also carries the series' *history floor* under
+//! [`HISTORY_FLOOR_KEY`], so the dataset describes itself and no metadata has to
+//! live outside `data_dir` (where it would not survive a move to another machine
+//! or a round trip through a dataset repository).
 
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
@@ -14,6 +19,7 @@ use arrow::record_batch::RecordBatch;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::ArrowWriter;
 use parquet::basic::{Compression, ZstdLevel};
+use parquet::file::metadata::KeyValue;
 use parquet::file::properties::{EnabledStatistics, WriterProperties};
 
 use crate::error::{Error, Result};
@@ -29,6 +35,15 @@ pub const TURNOVER_COL: &str = "turnover";
 pub const SYMBOL_COL: &str = "symbol";
 /// Column holding the timeframe slug (optional).
 pub const TIMEFRAME_COL: &str = "timeframe";
+
+/// Footer key holding the oldest bar the exchange has for this series.
+///
+/// Value: unix seconds. The key is written into every file the collector
+/// creates, which makes the floor a property of the *data* rather than of the
+/// machine that collected it: a directory copied (or downloaded from a dataset
+/// repository) onto a fresh host still knows how deep the history goes, and a
+/// repeat run costs no request at all.
+pub const HISTORY_FLOOR_KEY: &str = "kcs.history_start";
 
 /// How files are written.
 #[derive(Debug, Clone)]
@@ -97,14 +112,20 @@ pub fn schema(opts: &WriteOptions) -> SchemaRef {
     Arc::new(Schema::new(fields))
 }
 
-fn writer_properties(opts: &WriteOptions) -> Result<WriterProperties> {
+fn writer_properties(opts: &WriteOptions, floor: Option<i64>) -> Result<WriterProperties> {
     let level = ZstdLevel::try_new(opts.zstd_level)?;
-    Ok(WriterProperties::builder()
+    let mut builder = WriterProperties::builder()
         .set_compression(Compression::ZSTD(level))
         .set_max_row_group_row_count(Some(opts.max_row_group_rows.max(1)))
         .set_statistics_enabled(EnabledStatistics::Chunk)
-        .set_created_by(format!("kcs-klines/{}", env!("CARGO_PKG_VERSION")))
-        .build())
+        .set_created_by(format!("kcs-klines/{}", env!("CARGO_PKG_VERSION")));
+    if let Some(floor) = floor {
+        builder = builder.set_key_value_metadata(Some(vec![KeyValue::new(
+            HISTORY_FLOOR_KEY.to_string(),
+            floor.to_string(),
+        )]));
+    }
+    Ok(builder.build())
 }
 
 /// Build a `RecordBatch` for `candles` (which must be sorted ascending).
@@ -150,12 +171,16 @@ fn to_batch(
 ///
 /// The write goes to a sibling `.tmp` file that is fsynced and then renamed, so
 /// a crash can never leave a half-written Parquet file behind.
+///
+/// `floor` is recorded in the footer as [`HISTORY_FLOOR_KEY`] when set (see
+/// [`merge_into_file`] for how a series combines the values of its files).
 pub fn write_atomic(
     path: &Path,
     candles: &[Candle],
     symbol: &str,
     tf: Timeframe,
     opts: &WriteOptions,
+    floor: Option<i64>,
 ) -> Result<()> {
     ensure_parent_dir(path)?;
     let schema = schema(opts);
@@ -163,7 +188,7 @@ pub fn write_atomic(
 
     {
         let file = File::create(&tmp).map_err(|e| Error::io(&tmp, e))?;
-        let props = writer_properties(opts)?;
+        let props = writer_properties(opts, floor)?;
         let mut writer = ArrowWriter::try_new(file, schema.clone(), Some(props))?;
         let chunk = opts.max_row_group_rows.max(1);
         for block in candles.chunks(chunk) {
@@ -302,22 +327,51 @@ fn downcast<'a, T: 'static>(
         })
 }
 
-/// Number of rows in a Parquet file, read from the footer only.
-pub fn row_count(path: &Path) -> Result<i64> {
-    let file = File::open(path).map_err(|e| Error::io(path, e))?;
-    let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
-    Ok(builder.metadata().file_metadata().num_rows())
+/// Everything the collector needs to know about one file, from the footer only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileInfo {
+    /// Row count.
+    pub rows: i64,
+    /// Oldest bar in the file.
+    pub min: i64,
+    /// Newest bar in the file.
+    pub max: i64,
+    /// History floor recorded when the file was written, when it carries one.
+    pub floor: Option<i64>,
 }
 
-/// `(min_time, max_time)` of a Parquet file.
+/// Read a file's [`FileInfo`] from its footer.
 ///
-/// Tries the Parquet statistics first (footer only, no data pages read) and
-/// falls back to a full scan when statistics are unavailable.
-pub fn time_range(path: &Path) -> Result<Option<(i64, i64)>> {
+/// Chunk statistics make this a single footer read. The rare file written
+/// without statistics falls back to a full scan; `None` means the file holds no
+/// rows at all.
+pub fn file_info(path: &Path) -> Result<Option<FileInfo>> {
     let file = File::open(path).map_err(|e| Error::io(path, e))?;
     let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
     let meta = builder.metadata().clone();
+    let rows = meta.file_metadata().num_rows();
+    let floor = floor_from(&meta);
 
+    let (min, max) = match stats_range(&meta) {
+        Some(range) => range,
+        None => {
+            let candles = read_candles(path)?;
+            match (candles.first(), candles.last()) {
+                (Some(first), Some(last)) => (first.time, last.time),
+                _ => return Ok(None),
+            }
+        }
+    };
+    Ok(Some(FileInfo {
+        rows,
+        min,
+        max,
+        floor,
+    }))
+}
+
+/// `(min_time, max_time)` from the row-group statistics, if they are usable.
+fn stats_range(meta: &parquet::file::metadata::ParquetMetaData) -> Option<(i64, i64)> {
     let mut min: Option<i64> = None;
     let mut max: Option<i64> = None;
     for rg in 0..meta.num_row_groups() {
@@ -337,19 +391,20 @@ pub fn time_range(path: &Path) -> Result<Option<(i64, i64)>> {
             }
         }
     }
-    if let (Some(lo), Some(hi)) = (min, max) {
-        return Ok(Some((lo, hi)));
+    match (min, max) {
+        (Some(lo), Some(hi)) => Some((lo, hi)),
+        _ => None,
     }
+}
 
-    let mut candles = read_candles(path)?;
-    if candles.is_empty() {
-        return Ok(None);
-    }
-    candles.sort_unstable_by_key(|c| c.time);
-    Ok(Some((
-        candles.first().expect("non-empty").time,
-        candles.last().expect("non-empty").time,
-    )))
+/// The history floor recorded in a footer, if the file carries one.
+fn floor_from(meta: &parquet::file::metadata::ParquetMetaData) -> Option<i64> {
+    meta.file_metadata()
+        .key_value_metadata()?
+        .iter()
+        .find(|kv| kv.key == HISTORY_FLOOR_KEY)
+        .and_then(|kv| kv.value.as_deref())
+        .and_then(|v| v.parse::<i64>().ok())
 }
 
 fn i64_from_le_bytes(bytes: &[u8]) -> Option<i64> {
@@ -367,12 +422,17 @@ fn i64_from_le_bytes(bytes: &[u8]) -> Option<i64> {
 /// mtimes (and therefore any downstream file-sync tooling) stable. On timestamp
 /// collisions the fresh candle wins, which is how a still-forming last bar gets
 /// corrected on the next run.
+///
+/// The recorded history floor is combined with the one already in the file by
+/// taking the older value: the floor only ever moves *down* as we learn more, and
+/// a rewrite must never lose what an earlier run established.
 pub fn merge_into_file(
     path: &Path,
     new_candles: &[Candle],
     symbol: &str,
     tf: Timeframe,
     opts: &WriteOptions,
+    floor: Option<i64>,
 ) -> Result<MergeStats> {
     let existing = if path.exists() {
         read_candles(path)?
@@ -406,7 +466,11 @@ pub fn merge_into_file(
         });
     }
 
-    write_atomic(path, &merged, symbol, tf, opts)?;
+    let recorded = match (existing_floor(path)?, floor) {
+        (Some(old), Some(new)) => Some(old.min(new)),
+        (old, new) => old.or(new),
+    };
+    write_atomic(path, &merged, symbol, tf, opts, recorded)?;
     Ok(MergeStats {
         rows_before,
         rows_after,
@@ -414,6 +478,14 @@ pub fn merge_into_file(
         rows_refreshed: refreshed,
         changed: true,
     })
+}
+
+/// The history floor already recorded in `path`, if the file exists.
+fn existing_floor(path: &Path) -> Result<Option<i64>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    Ok(file_info(path)?.and_then(|info| info.floor))
 }
 
 /// Count how many of `fresh` are not present in `existing` (both sorted).
@@ -460,6 +532,9 @@ pub fn merge_sorted(existing: &[Candle], fresh: &[Candle]) -> Vec<Candle> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 2020-01-01T00:00:00Z.
+    const DAY0: i64 = 1_577_836_800;
 
     fn candle(time: i64, close: f64) -> Candle {
         Candle {
@@ -508,7 +583,7 @@ mod tests {
         let candles: Vec<Candle> = (0..5_000)
             .map(|i| candle(1_700_000_000 + i * 60, 100.0 + i as f64))
             .collect();
-        write_atomic(&path, &candles, "BTC-USDT", Timeframe::M1, &opts).unwrap();
+        write_atomic(&path, &candles, "BTC-USDT", Timeframe::M1, &opts, None).unwrap();
         assert!(path.exists());
 
         let read = read_candles(&path).unwrap();
@@ -516,10 +591,14 @@ mod tests {
         assert_eq!(read[0], candles[0]);
         assert_eq!(read[4_999], candles[4_999]);
 
-        assert_eq!(row_count(&path).unwrap(), 5_000);
         assert_eq!(
-            time_range(&path).unwrap(),
-            Some((candles[0].time, candles[4_999].time))
+            file_info(&path).unwrap(),
+            Some(FileInfo {
+                rows: 5_000,
+                min: candles[0].time,
+                max: candles[4_999].time,
+                floor: None,
+            })
         );
         // No temporary files left behind.
         let leftovers: Vec<_> = std::fs::read_dir(path.parent().unwrap())
@@ -536,14 +615,14 @@ mod tests {
         let path = dir.path().join("2024-01.parquet");
         let opts = WriteOptions::default();
         let first = vec![candle(60, 1.0), candle(120, 2.0)];
-        let stats = merge_into_file(&path, &first, "BTC-USDT", Timeframe::M1, &opts).unwrap();
+        let stats = merge_into_file(&path, &first, "BTC-USDT", Timeframe::M1, &opts, None).unwrap();
         assert!(stats.changed);
         assert_eq!(stats.rows_after, 2);
         assert_eq!(stats.rows_added, 2);
 
         // Same data again: nothing changes, file is not rewritten.
         let mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
-        let stats = merge_into_file(&path, &first, "BTC-USDT", Timeframe::M1, &opts).unwrap();
+        let stats = merge_into_file(&path, &first, "BTC-USDT", Timeframe::M1, &opts, None).unwrap();
         assert!(!stats.changed);
         assert_eq!(stats.rows_added, 0);
         assert_eq!(stats.rows_refreshed, 2);
@@ -551,11 +630,86 @@ mod tests {
 
         // A corrected last bar changes the file without adding rows.
         let fixed = vec![candle(120, 7.0)];
-        let stats = merge_into_file(&path, &fixed, "BTC-USDT", Timeframe::M1, &opts).unwrap();
+        let stats = merge_into_file(&path, &fixed, "BTC-USDT", Timeframe::M1, &opts, None).unwrap();
         assert!(stats.changed);
         assert_eq!(stats.rows_added, 0);
         assert_eq!(stats.rows_after, 2);
         assert_eq!(read_candles(&path).unwrap()[1].close, 7.0);
+    }
+
+    #[test]
+    fn the_history_floor_travels_in_the_footer() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("2024-01.parquet");
+        let opts = WriteOptions::default();
+        let candles = vec![candle(1_704_067_200, 1.0), candle(1_704_067_260, 2.0)];
+        write_atomic(
+            &path,
+            &candles,
+            "BTC-USDT",
+            Timeframe::M1,
+            &opts,
+            Some(DAY0),
+        )
+        .unwrap();
+
+        // Read back through the footer, exactly as the collector does when the
+        // directory came from somewhere else (another machine, a dataset repo).
+        let info = file_info(&path).unwrap().unwrap();
+        assert_eq!(info.floor, Some(DAY0));
+        assert_eq!(info.rows, 2);
+        // Arrow keeps its own footer entry alongside ours.
+        assert!(read_candles(&path).unwrap().len() == 2);
+
+        // Writing without a floor records nothing, and the file stays readable.
+        let plain = dir.path().join("plain.parquet");
+        write_atomic(&plain, &candles, "BTC-USDT", Timeframe::M1, &opts, None).unwrap();
+        assert_eq!(file_info(&plain).unwrap().unwrap().floor, None);
+    }
+
+    #[test]
+    fn a_rewrite_never_loses_an_older_recorded_floor() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("2024-01.parquet");
+        let opts = WriteOptions::default();
+        let listed = 1_500_000_000; // the real start of history
+        let later = 1_704_067_200; // what a `--start` run happens to know
+
+        // First run knows only a late floor…
+        merge_into_file(
+            &path,
+            &[candle(1_704_067_200, 1.0)],
+            "BTC-USDT",
+            Timeframe::M1,
+            &opts,
+            Some(later),
+        )
+        .unwrap();
+        assert_eq!(file_info(&path).unwrap().unwrap().floor, Some(later));
+
+        // …and a later run that learned the real listing date must move it down.
+        merge_into_file(
+            &path,
+            &[candle(1_704_067_320, 2.0)],
+            "BTC-USDT",
+            Timeframe::M1,
+            &opts,
+            Some(listed),
+        )
+        .unwrap();
+        assert_eq!(file_info(&path).unwrap().unwrap().floor, Some(listed));
+
+        // A run that knows only the late floor again must not raise it back.
+        merge_into_file(
+            &path,
+            &[candle(1_704_067_380, 3.0)],
+            "BTC-USDT",
+            Timeframe::M1,
+            &opts,
+            Some(later),
+        )
+        .unwrap();
+        assert_eq!(file_info(&path).unwrap().unwrap().floor, Some(listed));
     }
 
     #[test]
@@ -568,7 +722,7 @@ mod tests {
             ..Default::default()
         };
         let candles = vec![candle(60, 1.5), candle(120, 2.5)];
-        write_atomic(&path, &candles, "ETH-USDT", Timeframe::M1, &opts).unwrap();
+        write_atomic(&path, &candles, "ETH-USDT", Timeframe::M1, &opts, None).unwrap();
         let read = read_candles(&path).unwrap();
         assert_eq!(read.len(), 2);
         assert_eq!(read[0].turnover, 0.0, "missing column reads as zero");

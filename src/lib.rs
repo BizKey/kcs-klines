@@ -15,7 +15,6 @@ pub mod config;
 pub mod error;
 pub mod kucoin;
 pub mod notify;
-pub mod state;
 pub mod status;
 pub mod storage;
 pub mod util;

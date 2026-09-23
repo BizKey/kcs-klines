@@ -9,11 +9,6 @@
 # files, so a local disk is a good idea.
 data_dir = "./data"
 
-# Cache of one number per series: the oldest bar the exchange has, as verified by a
-# probe. Everything else about the data is read from the Parquet files themselves.
-# Kept outside `data_dir` so it is never uploaded to the dataset repository.
-state_dir = "./state"
-
 # KuCoin Spot REST endpoint. Use a regional host if you have one.
 base_url = "https://api.kucoin.com"
 

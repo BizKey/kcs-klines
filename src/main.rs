@@ -17,7 +17,6 @@ use kcs_klines::collector::{Collector, RunReport, SeriesReport};
 use kcs_klines::config::{Config, LoggingConfig};
 use kcs_klines::kucoin::{KucoinClient, Timeframe};
 use kcs_klines::notify;
-use kcs_klines::state::StateStore;
 use kcs_klines::status;
 use kcs_klines::storage::Store;
 use kcs_klines::util::format_ts;
@@ -48,7 +47,6 @@ struct App {
     cfg: Arc<Config>,
     client: Arc<KucoinClient>,
     store: Store,
-    state: StateStore,
 }
 
 impl App {
@@ -61,12 +59,10 @@ impl App {
             cfg.storage.layout_options()?,
             cfg.storage.write_options()?,
         );
-        let state = StateStore::new(cfg.general.state_dir.clone());
         Ok(App {
             cfg: Arc::new(cfg),
             client,
             store,
-            state,
         })
     }
 }
@@ -139,13 +135,8 @@ async fn collect_command(cfg: Config, args: CollectArgs) -> Result<ExitCode> {
     cfg.validate()?;
 
     let app = App::new(cfg)?;
-    let collector = Collector::new(
-        app.client.clone(),
-        app.store.clone(),
-        app.state.clone(),
-        app.cfg.clone(),
-    )
-    .with_dry_run(args.dry_run);
+    let collector = Collector::new(app.client.clone(), app.store.clone(), app.cfg.clone())
+        .with_dry_run(args.dry_run);
 
     let symbols = collector
         .resolve_symbols(&args.symbols)
@@ -380,12 +371,7 @@ async fn verify_command(cfg: Config, args: VerifyArgs) -> Result<ExitCode> {
 
 async fn symbols_command(cfg: Config, args: SymbolsArgs) -> Result<ExitCode> {
     let app = App::new(cfg)?;
-    let collector = Collector::new(
-        app.client.clone(),
-        app.store.clone(),
-        app.state.clone(),
-        app.cfg.clone(),
-    );
+    let collector = Collector::new(app.client.clone(), app.store.clone(), app.cfg.clone());
     let symbols = collector.resolve_symbols(&[]).await?;
     if args.json {
         println!("{}", serde_json::to_string_pretty(&symbols)?);
@@ -411,12 +397,12 @@ async fn init_command(args: InitArgs) -> Result<ExitCode> {
     std::fs::write(&args.output, &template)
         .with_context(|| format!("cannot write {}", args.output.display()))?;
 
-    // Create the directories the config points at, so the first run has nowhere
-    // to stumble.
+    // Create the directory the config points at, so the first run has nowhere to
+    // stumble.
     let parsed: Config = toml::from_str(&template)?;
-    for dir in [&parsed.general.data_dir, &parsed.general.state_dir] {
-        std::fs::create_dir_all(dir).with_context(|| format!("cannot create {}", dir.display()))?;
-    }
+    let data_dir = &parsed.general.data_dir;
+    std::fs::create_dir_all(data_dir)
+        .with_context(|| format!("cannot create {}", data_dir.display()))?;
     println!("wrote {}", args.output.display());
     println!("data directory: {}", parsed.general.data_dir.display());
     println!("next: kcs-klines backfill --timeframe 1h");

@@ -9,9 +9,10 @@
 //! * **jumps over already-covered periods for free** — the coverage of every
 //!   Parquet file is read from its footer statistics, so a second run makes a
 //!   handful of requests instead of thousands;
-//! * **stops at the real start of history**: once a window comes back empty
-//!   (and deeper probes confirm nothing older exists) the pair's listing date
-//!   has been found and is cached in [`crate::state`];
+//! * **stops at the real start of history**: the pair's listing date is kept in
+//!   the Parquet footer of the series (see
+//!   [`HISTORY_FLOOR_KEY`](crate::storage::HISTORY_FLOOR_KEY)), so the knowledge
+//!   travels with the data instead of living in a file next to it;
 //! * **flushes complete periods to disk as it goes**, so an interrupted run
 //!   keeps everything it already fetched and the next run resumes from there.
 
@@ -22,13 +23,22 @@ use std::time::{Duration, Instant};
 use crate::config::Config;
 use crate::error::Result;
 use crate::kucoin::{Candle, KucoinClient, Timeframe};
-use crate::state::StateStore;
 use crate::storage::{parquet_store, Period, Store};
 use crate::util::{format_ts, now_unix};
 
 /// KuCoin did not exist before this instant (2010-01-01T00:00:00Z); the bound
 /// also prevents runaway backward scans.
 pub const MIN_TIMESTAMP: i64 = 1_262_304_000;
+
+/// [`MIN_TIMESTAMP`] snapped onto a timeframe's grid.
+///
+/// 2010-01-01 was a Friday while weekly bars are labelled on Thursdays, so the
+/// bare constant cannot be used as a window bound: the client refuses a window
+/// that is off the grid. Snapping *down* at worst asks for one slot below the
+/// bound, which the scan already treats as its end.
+fn earliest_window_bound(tf: Timeframe) -> i64 {
+    tf.align(MIN_TIMESTAMP)
+}
 
 /// How many invalid candles are logged individually before logging switches to a
 /// single summary line.
@@ -184,25 +194,27 @@ impl RunReport {
 pub struct Collector {
     client: Arc<KucoinClient>,
     store: Store,
-    state: StateStore,
     cfg: Arc<Config>,
     dry_run: bool,
     /// Memoised exchange clock (see [`Collector::exchange_now`]).
     exchange_time: Arc<tokio::sync::OnceCell<i64>>,
 }
 
+/// What the write path needs to know about the series being collected.
+struct SeriesCtx<'a> {
+    symbol: &'a str,
+    tf: Timeframe,
+    /// Value recorded in the footer of every file this run writes, so later runs
+    /// (anywhere) know the floor without probing.
+    floor: Option<i64>,
+}
+
 impl Collector {
     /// Build a collector.
-    pub fn new(
-        client: Arc<KucoinClient>,
-        store: Store,
-        state: StateStore,
-        cfg: Arc<Config>,
-    ) -> Self {
+    pub fn new(client: Arc<KucoinClient>, store: Store, cfg: Arc<Config>) -> Self {
         Collector {
             client,
             store,
-            state,
             cfg,
             dry_run: false,
             exchange_time: Arc::new(tokio::sync::OnceCell::new()),
@@ -223,11 +235,6 @@ impl Collector {
     /// Store in use.
     pub fn store(&self) -> &Store {
         &self.store
-    }
-
-    /// State store in use.
-    pub fn state_store(&self) -> &StateStore {
-        &self.state
     }
 
     /// Exchange time, falling back to the local clock.
@@ -290,8 +297,12 @@ impl Collector {
         let max_empty = self.cfg.collection.max_empty_windows.max(1);
 
         let mut report = SeriesReport::new(symbol, tf, self.dry_run);
-        let mut covered = self.store.coverage_by_period(symbol, tf)?;
-        let mut state = self.state.load(symbol, tf)?;
+        let scan = self.store.scan(symbol, tf)?;
+        // How deep the history is, as recorded *in the data* by an earlier run.
+        let recorded_floor = scan.floor;
+        let oldest_on_disk = scan.oldest();
+        let has_files = !scan.files.is_empty();
+        let mut covered = scan.coverage;
 
         let now = self.exchange_now().await;
         // Because `endAt` is exclusive, an upper bound of `X` means "every bar
@@ -326,7 +337,7 @@ impl Collector {
         // Lower bound of the scan, inclusive: no bar older than this is needed.
         let configured = self.cfg.collection.start_spec()?;
         let mut discovery = false;
-        let mut scan_lo: Option<i64> = match (configured, state.history_start) {
+        let mut scan_lo: Option<i64> = match (configured, recorded_floor) {
             (Some(ts), _) => Some(tf.align(ts).max(MIN_TIMESTAMP)),
             (None, Some(ts)) => Some(tf.align(ts).max(MIN_TIMESTAMP)),
             (None, None) => {
@@ -334,31 +345,30 @@ impl Collector {
                 None
             }
         };
-        // The cache is only a claim about the exchange, and the files can disprove
-        // it: bars sitting *older* than the cached floor mean the claim is simply
-        // wrong. In that case drop it and probe again, so a stale cache can never
-        // hide data that exists upstream.
-        let oldest_on_disk = covered.values().map(|(lo, _)| *lo).min();
-        if let (Some(cached), Some(on_disk)) = (scan_lo, oldest_on_disk) {
-            if on_disk < cached {
+        // The recorded floor is only a claim about the exchange, and the files can
+        // disprove it: bars sitting *older* than it mean the claim is simply wrong.
+        // In that case drop it and walk again, so a stale record can never hide
+        // data that exists upstream.
+        if let (Some(recorded), Some(on_disk)) = (scan_lo, oldest_on_disk) {
+            if on_disk < recorded {
                 tracing::debug!(
                     symbol,
                     timeframe = tf.slug(),
-                    cached_floor = %format_ts(cached),
+                    recorded_floor = %format_ts(recorded),
                     oldest_on_disk = %format_ts(on_disk),
-                    "the cached history floor is stale, probing again"
+                    "the recorded history floor is stale, walking deeper"
                 );
                 scan_lo = configured.map(|ts| tf.align(ts).max(MIN_TIMESTAMP));
                 discovery = scan_lo.is_none();
             }
         }
 
-        // Find where this pair's history actually begins. Walking **daily**
-        // candles (1500 days per request, so ~4 calls for a decade) gives a far
-        // better floor than guessing from empty intraday windows, and it lets the
-        // main scan run strictly linearly down to that floor — so a long
-        // delisting gap can never hide older data from us.
-        if discovery {
+        // A series with nothing on disk has no floor to walk down to, so asking
+        // the daily candles where the pair starts (~4 requests) is far cheaper
+        // than discovering it by fetching empty intraday windows. With data
+        // already present that question is answered by the walk itself: covered
+        // periods cost nothing, and the bottom is confirmed by probing deeper.
+        if discovery && !has_files {
             match self.discover_history_start(symbol, &mut report).await {
                 Ok(Some(first)) => {
                     // Align the daily floor to the target timeframe's grid, which
@@ -384,6 +394,18 @@ impl Collector {
                 ),
             }
         }
+        // The floor every file written by this run will carry: the deepest value
+        // known, so a `--start` that is *later* than a floor already recorded in the
+        // data can never hide the deeper history.
+        let floor_written = match (recorded_floor, configured) {
+            (Some(recorded), Some(start)) => Some(recorded.min(tf.align(start).max(MIN_TIMESTAMP))),
+            (recorded, start) => recorded.or(start.map(|ts| tf.align(ts).max(MIN_TIMESTAMP))),
+        };
+        let cx = SeriesCtx {
+            symbol,
+            tf,
+            floor: floor_written,
+        };
 
         tracing::debug!(
             symbol,
@@ -423,14 +445,7 @@ impl Collector {
             let mut resume_from: Option<i64> = None;
             if let Some((c_lo, c_hi)) = covered.get(&period).copied() {
                 if c_lo <= needed_lo && c_hi >= newest_wanted {
-                    self.flush_ready(
-                        symbol,
-                        tf,
-                        &mut buffers,
-                        needed_lo,
-                        &mut covered,
-                        &mut report,
-                    )?;
+                    self.flush_ready(&cx, &mut buffers, needed_lo, &mut covered, &mut report)?;
                     report.periods_skipped += 1;
                     cursor = needed_lo;
                     empties = 0;
@@ -456,7 +471,7 @@ impl Collector {
             }
 
             let window_start = resume_from.unwrap_or_else(|| tf.shift(cursor, -limit));
-            let from = window_start.max(needed_lo).max(MIN_TIMESTAMP);
+            let from = window_start.max(needed_lo).max(earliest_window_bound(tf));
             if from >= cursor {
                 break;
             }
@@ -561,23 +576,43 @@ impl Collector {
             // progression never depends on what the exchange returned and no bar
             // can fall between two windows.
             cursor = from;
-            self.flush_ready(symbol, tf, &mut buffers, cursor, &mut covered, &mut report)?;
+            self.flush_ready(&cx, &mut buffers, cursor, &mut covered, &mut report)?;
         }
 
         // Everything still buffered belongs to the newest periods.
-        self.flush_all(symbol, tf, &mut buffers, &mut covered, &mut report)?;
+        self.flush_all(&cx, &mut buffers, &mut covered, &mut report)?;
 
         if !self.dry_run {
             let (first, _, _) = self.coverage_summary(&covered);
             // Where history *really* starts is where the data starts: a pair may be
-            // listed on the 19th while its first monthly bar only exists from the 1st
-            // of the next month. Caching the actual first bar stops every later run
-            // from re-probing the empty band in front of it.
-            if let Some(lo) = first.or(scan_lo) {
-                state.history_start = Some(lo);
-            }
-            if let Err(e) = self.state.save(symbol, tf, &state) {
-                tracing::warn!(symbol, timeframe = tf.slug(), error = %e, "cannot persist series state");
+            // listed mid-month (so the probe's day-accurate floor sits before the
+            // first monthly bar) or the walk may have reached the bottom only now.
+            // Recording the actual first bar stops every later run — on this machine
+            // or another — from re-walking the empty band in front of it.
+            //
+            // A `--start` bounds where the walk *looked*, so it proves nothing about
+            // what lies deeper: that run leaves the recorded floor alone.
+            if configured.is_none() {
+                if let Some(floor) = first.or(scan_lo) {
+                    if floor_written != Some(floor) {
+                        match self.store.stamp_floor(symbol, tf, floor) {
+                            Ok(Some(path)) => tracing::debug!(
+                                symbol,
+                                timeframe = tf.slug(),
+                                history_start = %format_ts(floor),
+                                path = %path.display(),
+                                "recorded the history floor in the partition file"
+                            ),
+                            Ok(None) => {}
+                            Err(e) => tracing::warn!(
+                                symbol,
+                                timeframe = tf.slug(),
+                                error = %e,
+                                "cannot record the history floor in the data"
+                            ),
+                        }
+                    }
+                }
             }
         }
 
@@ -605,8 +640,7 @@ impl Collector {
     /// at or below it can still belong to that period.
     fn flush_ready(
         &self,
-        symbol: &str,
-        tf: Timeframe,
+        cx: &SeriesCtx<'_>,
         buffers: &mut BTreeMap<Period, Vec<Candle>>,
         cursor: i64,
         covered: &mut BTreeMap<Period, (i64, i64)>,
@@ -619,7 +653,7 @@ impl Collector {
             .collect();
         for period in ready {
             if let Some(candles) = buffers.remove(&period) {
-                self.flush_one(symbol, tf, period, candles, covered, report)?;
+                self.flush_one(cx, period, candles, covered, report)?;
             }
         }
         Ok(())
@@ -628,8 +662,7 @@ impl Collector {
     /// Flush everything that is still buffered.
     fn flush_all(
         &self,
-        symbol: &str,
-        tf: Timeframe,
+        cx: &SeriesCtx<'_>,
         buffers: &mut BTreeMap<Period, Vec<Candle>>,
         covered: &mut BTreeMap<Period, (i64, i64)>,
         report: &mut SeriesReport,
@@ -637,7 +670,7 @@ impl Collector {
         let periods: Vec<Period> = buffers.keys().copied().collect();
         for period in periods {
             if let Some(candles) = buffers.remove(&period) {
-                self.flush_one(symbol, tf, period, candles, covered, report)?;
+                self.flush_one(cx, period, candles, covered, report)?;
             }
         }
         Ok(())
@@ -646,8 +679,7 @@ impl Collector {
     /// Merge one buffered period into its Parquet file.
     fn flush_one(
         &self,
-        symbol: &str,
-        tf: Timeframe,
+        cx: &SeriesCtx<'_>,
         period: Period,
         candles: Vec<Candle>,
         covered: &mut BTreeMap<Period, (i64, i64)>,
@@ -680,15 +712,17 @@ impl Collector {
             return Ok(());
         }
 
-        let (path, stats) = self.store.merge(symbol, tf, period, &candles)?;
+        let (path, stats) = self
+            .store
+            .merge(cx.symbol, cx.tf, period, &candles, cx.floor)?;
         report.rows_added += stats.rows_added;
         report.rows_refreshed += stats.rows_refreshed;
         report.rows_net += stats.net_new();
         if stats.changed {
             report.files_written += 1;
             tracing::debug!(
-                symbol,
-                timeframe = tf.slug(),
+                symbol = cx.symbol,
+                timeframe = cx.tf.slug(),
                 period = %period,
                 rows = stats.rows_after,
                 added = stats.rows_added,
@@ -701,8 +735,8 @@ impl Collector {
 
         // Re-read the real coverage from the file footer so later period jumps
         // are based on what is actually on disk.
-        if let Some((lo, hi)) = parquet_store::time_range(&path)? {
-            covered.insert(period, (lo, hi));
+        if let Some(info) = parquet_store::file_info(&path)? {
+            covered.insert(period, (info.min, info.max));
         } else {
             covered
                 .entry(period)
@@ -730,7 +764,7 @@ impl Collector {
         let limit = probe_tf.max_candles() as i64;
         let now = self.exchange_now().await;
         // Exclusive upper bound: daily bars strictly before the current day.
-        let mut cursor = probe_tf.align(now).max(MIN_TIMESTAMP);
+        let mut cursor = probe_tf.align(now).max(earliest_window_bound(probe_tf));
         let mut oldest: Option<i64> = None;
 
         // 12 windows is ~49 years: a hard stop that can never loop forever.
@@ -738,7 +772,9 @@ impl Collector {
             if cursor <= MIN_TIMESTAMP {
                 break;
             }
-            let from = probe_tf.shift(cursor, -limit).max(MIN_TIMESTAMP);
+            let from = probe_tf
+                .shift(cursor, -limit)
+                .max(earliest_window_bound(probe_tf));
             let candles = self
                 .client
                 .candles_window(symbol, probe_tf, from, cursor)
@@ -779,7 +815,7 @@ impl Collector {
             if to <= MIN_TIMESTAMP {
                 return Ok(None);
             }
-            let from = tf.shift(to, -limit).max(MIN_TIMESTAMP);
+            let from = tf.shift(to, -limit).max(earliest_window_bound(tf));
             tracing::debug!(
                 symbol,
                 timeframe = tf.slug(),
@@ -925,13 +961,11 @@ mod tests {
         collector: Collector,
         cfg: Arc<Config>,
         _data: tempfile::TempDir,
-        _state: tempfile::TempDir,
     }
 
     async fn harness(cfg_mut: impl FnOnce(&mut Config)) -> Harness {
         let server = MockServer::start().await;
         let data = tempfile::tempdir().unwrap();
-        let state_dir = tempfile::tempdir().unwrap();
         let mut cfg = Config::default();
         cfg.general.base_url = server.uri();
         cfg.rate_limit.min_interval_ms = 0;
@@ -945,14 +979,12 @@ mod tests {
             LayoutOptions::default(),
             WriteOptions::default(),
         );
-        let state = StateStore::new(state_dir.path());
-        let collector = Collector::new(client, store, state, cfg.clone());
+        let collector = Collector::new(client, store, cfg.clone());
         Harness {
             server,
             collector,
             cfg,
             _data: data,
-            _state: state_dir,
         }
     }
 
@@ -1172,7 +1204,7 @@ mod tests {
         let period = h.collector.store().period_of(DAY0, Timeframe::H1);
         h.collector
             .store()
-            .merge("BTC-USDT", Timeframe::H1, period, &january)
+            .merge("BTC-USDT", Timeframe::H1, period, &january, None)
             .unwrap();
 
         mount_time(&h.server, at("2020-03-15") + 12 * 3600).await;
@@ -1193,9 +1225,17 @@ mod tests {
         assert_eq!(report.rows_added, 696 + 14 * 24 + 12, "{report:?}");
         assert_eq!(report.first_candle, Some(DAY0));
         assert_eq!(report.last_candle, Some(at("2020-03-15") + 11 * 3600));
+        // Only the missing tail is fetched. The extra windows are the one-off walk
+        // that finds where the history of this series begins, because the file it
+        // started from was written before floors were recorded in the data.
         assert_eq!(
-            report.windows, 1,
+            report.requests - report.probes - report.empty_windows,
+            1,
             "one window covers the missing tail: {report:?}"
+        );
+        assert_eq!(
+            report.probes, 1,
+            "the floor is learned, not guessed: {report:?}"
         );
 
         let files = h
@@ -1205,6 +1245,23 @@ mod tests {
             .unwrap();
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].rows, 744 + 696 + 14 * 24 + 12);
+        assert_eq!(
+            files[0].floor,
+            Some(DAY0),
+            "the floor is now recorded in the data"
+        );
+
+        // Which is the point of recording it: the next run costs nothing at all.
+        let later = Collector::new(
+            h.collector.client().clone(),
+            h.collector.store().clone(),
+            h.cfg.clone(),
+        );
+        let second = later
+            .collect_series("BTC-USDT", Timeframe::H1)
+            .await
+            .unwrap();
+        assert_eq!(second.requests, 0, "{second:?}");
     }
 
     #[tokio::test]
@@ -1261,7 +1318,7 @@ mod tests {
         let existing: Vec<Candle> = stored.iter().map(|(t, p)| candle(*t, *p)).collect();
         h.collector
             .store()
-            .merge("BTC-USDT", Timeframe::M5, period, &existing)
+            .merge("BTC-USDT", Timeframe::M5, period, &existing, None)
             .unwrap();
 
         // "Now" is exactly 1 July, so the run starts at the June/July boundary.
@@ -1287,10 +1344,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_cached_floor_never_hides_data() {
-        // The cached floor may only make the scan look deeper. If the files hold
-        // bars older than it, the earlier value wins — a stale cache must never be
-        // able to hide data that is sitting on disk.
+    async fn a_recorded_floor_never_hides_data() {
+        // The floor recorded in the data may only make the scan look deeper. If the
+        // files hold bars older than it, the data wins — a stale record must never be
+        // able to hide bars that are sitting on disk.
         let h = harness(|_| {}).await;
         let jan = at("2020-01-01");
         let march = at("2020-03-01");
@@ -1298,17 +1355,13 @@ mod tests {
         let stored: Vec<Candle> = (0..24).map(|i| candle(march + i * 3600, 1.0)).collect();
         h.collector
             .store()
-            .merge("BTC-USDT", Timeframe::H1, period, &stored)
-            .unwrap();
-        // The cache claims "nothing before June", which is later than the data.
-        h.collector
-            .state_store()
-            .save(
+            .merge(
                 "BTC-USDT",
                 Timeframe::H1,
-                &crate::state::SeriesState {
-                    history_start: Some(at("2020-06-01")),
-                },
+                period,
+                &stored,
+                // The record claims "nothing before June", which is later than the data.
+                Some(at("2020-06-01")),
             )
             .unwrap();
 
@@ -1323,7 +1376,6 @@ mod tests {
         let later = Collector::new(
             h.collector.client().clone(),
             h.collector.store().clone(),
-            h.collector.state_store().clone(),
             h.cfg.clone(),
         );
         let report = later
@@ -1333,7 +1385,91 @@ mod tests {
         assert_eq!(
             report.first_candle,
             Some(jan),
-            "the stale cache must not stop the scan above the data: {report:?}"
+            "the stale record must not stop the scan above the data: {report:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_directory_written_without_a_recorded_floor_is_migrated() {
+        // The user's scenario: `data/` is copied to another machine (or downloaded
+        // from a dataset repository) and there is no state next to it. The files hold
+        // no floor, so the run walks down, learns where history starts, and puts the
+        // answer *into the data* — after which every later run, anywhere, is free.
+        let h = harness(|_| {}).await;
+        let bars = FakeExchange::series(DAY0, 24 * 40, 100.0); // 2020-01-01 .. 02-09
+        let period = h.collector.store().period_of(DAY0, Timeframe::H1);
+        let existing: Vec<Candle> = bars.iter().map(|(t, p)| candle(*t, *p)).collect();
+        h.collector
+            .store()
+            .merge("BTC-USDT", Timeframe::H1, period, &existing, None)
+            .unwrap();
+        assert_eq!(
+            h.collector
+                .store()
+                .scan("BTC-USDT", Timeframe::H1)
+                .unwrap()
+                .floor,
+            None,
+            "a file written by an older version carries no floor"
+        );
+
+        mount_time(&h.server, just_after(DAY0 + 39 * 3600, Timeframe::H1)).await;
+        mount_exchange(&h.server, FakeExchange::new(bars)).await;
+
+        let first = h
+            .collector
+            .collect_series("BTC-USDT", Timeframe::H1)
+            .await
+            .unwrap();
+        assert_eq!(first.first_candle, Some(DAY0));
+        assert_eq!(
+            h.collector
+                .store()
+                .scan("BTC-USDT", Timeframe::H1)
+                .unwrap()
+                .floor,
+            Some(DAY0),
+            "the walk's answer must end up in the data itself: {first:?}"
+        );
+
+        // Nothing left to learn: a later run (a fresh process, another machine) does
+        // not spend a single request.
+        let later = Collector::new(
+            h.collector.client().clone(),
+            h.collector.store().clone(),
+            h.cfg.clone(),
+        );
+        let second = later
+            .collect_series("BTC-USDT", Timeframe::H1)
+            .await
+            .unwrap();
+        assert_eq!(second.requests, 0, "{second:?}");
+    }
+
+    #[tokio::test]
+    async fn a_weekly_scan_keeps_its_windows_on_the_grid() {
+        // Weekly bars are labelled on Thursdays, so the absolute floor of a scan
+        // (2010-01-01, a Friday) is *off* the grid for `1w`. Using it raw as a window
+        // bound makes the client refuse the request — found live, on a series with no
+        // recorded floor, where the walk is allowed to run all the way down.
+        let h = harness(|_| {}).await;
+        let bars = FakeExchange::series_step(DAY0, 20 * 7 * 24, 3600, 1.0); // ~20 weeks
+        mount_time(
+            &h.server,
+            just_after(DAY0 + 20 * 7 * 24 * 3600, Timeframe::W1),
+        )
+        .await;
+        mount_exchange(&h.server, FakeExchange::new(bars)).await;
+
+        let report = h
+            .collector
+            .collect_series("BTC-USDT", Timeframe::W1)
+            .await
+            .unwrap();
+        assert!(report.first_candle.is_some(), "{report:?}");
+        assert!(
+            report.history_start.is_some_and(|f| f % 604_800 == 0),
+            "the recorded floor must sit on the weekly grid: {report:?}"
         );
     }
 
@@ -1370,7 +1506,6 @@ mod tests {
         let later = Collector::new(
             h.collector.client().clone(),
             h.collector.store().clone(),
-            h.collector.state_store().clone(),
             h.cfg.clone(),
         );
         let second = later
@@ -1426,7 +1561,6 @@ mod tests {
         let later = Collector::new(
             h.collector.client().clone(),
             h.collector.store().clone(),
-            h.collector.state_store().clone(),
             h.cfg.clone(),
         );
         let second = later

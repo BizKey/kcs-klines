@@ -298,7 +298,7 @@ mod tests {
         let start = hour_aligned(1_600_000_000);
         let candles: Vec<Candle> = (0..500).map(|i| candle(start + i * 3600, 10.0)).collect();
         let period = s.period_of(start, Timeframe::H1);
-        s.merge("BTC-USDT", Timeframe::H1, period, &candles)
+        s.merge("BTC-USDT", Timeframe::H1, period, &candles, None)
             .unwrap();
 
         let report =
@@ -318,7 +318,7 @@ mod tests {
         // Hole of 10 bars, then more data.
         candles.extend((110..200).map(|i| candle(start + i * 3600, 10.0)));
         let period = s.period_of(start, Timeframe::H1);
-        s.merge("BTC-USDT", Timeframe::H1, period, &candles)
+        s.merge("BTC-USDT", Timeframe::H1, period, &candles, None)
             .unwrap();
 
         let report =
@@ -341,7 +341,7 @@ mod tests {
         let mut candles: Vec<Candle> = (0..50).map(|i| candle(start + i * 3600, 10.0)).collect();
         candles.extend((51..100).map(|i| candle(start + i * 3600, 10.0)));
         let period = s.period_of(start, Timeframe::H1);
-        s.merge("BTC-USDT", Timeframe::H1, period, &candles)
+        s.merge("BTC-USDT", Timeframe::H1, period, &candles, None)
             .unwrap();
 
         let report = verify_series(
@@ -376,7 +376,7 @@ mod tests {
         });
         candles.push(candle(start + 11 * 3600 + 5, 10.0));
         let period = s.period_of(start, Timeframe::H1);
-        s.merge("BTC-USDT", Timeframe::H1, period, &candles)
+        s.merge("BTC-USDT", Timeframe::H1, period, &candles, None)
             .unwrap();
 
         let report =
@@ -396,7 +396,7 @@ mod tests {
         let mut candles: Vec<Candle> = (0..10).map(|i| candle(start + i * 3600, 10.0)).collect();
         candles.extend((11..20).map(|i| candle(start + i * 3600, 10.0)));
         let period = s.period_of(start, Timeframe::H1);
-        s.merge("BTC-USDT", Timeframe::H1, period, &candles)
+        s.merge("BTC-USDT", Timeframe::H1, period, &candles, None)
             .unwrap();
 
         let report =
@@ -437,7 +437,7 @@ mod tests {
         .map(|d| candle(crate::util::date_to_unix(d).unwrap(), 10.0))
         .collect();
         let period = s.period_of(candles[0].time, Timeframe::Mon1);
-        s.merge("BTC-USDT", Timeframe::Mon1, period, &candles)
+        s.merge("BTC-USDT", Timeframe::Mon1, period, &candles, None)
             .unwrap();
 
         let report = verify_series(
@@ -480,7 +480,7 @@ mod tests {
             WriteOptions::default(),
         );
         let period = s2.period_of(off_grid.time, Timeframe::Mon1);
-        s2.merge("ETH-USDT", Timeframe::Mon1, period, &[off_grid])
+        s2.merge("ETH-USDT", Timeframe::Mon1, period, &[off_grid], None)
             .unwrap();
         let report =
             verify_series(&s2, "ETH-USDT", Timeframe::Mon1, VerifyOptions::default()).unwrap();
@@ -495,7 +495,7 @@ mod tests {
         let candles = vec![candle(start, 1.0)];
         for (symbol, tf) in [("BTC-USDT", Timeframe::H1), ("ETH-USDT", Timeframe::M1)] {
             let period = s.period_of(start, tf);
-            s.merge(symbol, tf, period, &candles).unwrap();
+            s.merge(symbol, tf, period, &candles, None).unwrap();
         }
         let mut series = discover_series(&s).unwrap();
         series.sort();
@@ -536,7 +536,7 @@ mod tests {
         for (start, count) in [(jan, 10), (mar, 10)] {
             let candles: Vec<Candle> = (0..count).map(|i| candle(start + i * 3600, 5.0)).collect();
             let period = s.period_of(start, Timeframe::H1);
-            s.merge("BTC-USDT", Timeframe::H1, period, &candles)
+            s.merge("BTC-USDT", Timeframe::H1, period, &candles, None)
                 .unwrap();
         }
         let report =
