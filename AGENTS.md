@@ -107,10 +107,18 @@ Sharpe 0.38 on 1h.
   of history, on 1h/4h/1d alike, and in walk-forward (+1,086% vs +875%, Sharpe
   0.66 vs 0.43).
 * **…but it is a few-big-wins bet, and the headline multiples are fragile.**
-  Leave-one-out: BTC without its single best trade is 6.87x against 19.57x for
-  buy & hold; XRP without its best trade (Nov 2024 … Jan 2025, +341.6%) is 1.52x
-  against 4.26x. Only ~43–48 trades, so "beats buy & hold" means "caught one big
-  trend". Say so when quoting it.
+  Leave-one-out — compounding every trade except the best ones, *including* the
+  position still open at the end (get this wrong and the numbers do not add up:
+  an earlier version of this note omitted it): BTC 43.31x → 8.77x without its
+  best trade, against 19.57x for buy & hold; ETH 41.97x → 19.70x, still above
+  its 9.01x; XRP 6.69x → 1.52x against 4.26x; SUI 3.33x → 1.04x against 10.04x,
+  and 0.39x without the top two. With 16–48 trades, "beats buy & hold" mostly
+  means "caught a handful of big trends" — never quote a multiple without the
+  trade count next to it.
+* **The best `lookback` does not transfer between assets**: on 1h bars BTC
+  preferred 720, XRP 336, SUI 1440. That is an argument for the walk-forward
+  harness (which re-chooses per window) and against per-asset parameter tuning,
+  which is how you fit noise.
 * **Volatility targeting is a real improvement in risk shape**: exposure scaled
   to a volatility budget raised SMA 200 on 4h from Sharpe 0.65 to 1.07 and lifted
   the drawdown from −78% to −44%.
