@@ -1,0 +1,24 @@
+[project]
+name = "kcs-klines"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "BizKey", email = "toonychannel@gmail.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "huggingface-hub>=1.32.0",
+]
+
+[project.scripts]
+kcs-klines = "kcs_klines:main"
+
+[build-system]
+requires = ["uv_build>=0.12.18,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+# The strategy-testing toolkit lives in analysis/ (see analysis/README.md).
+testpaths = ["analysis/tests"]
+addopts = "-q"

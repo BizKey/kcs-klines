@@ -343,12 +343,42 @@ pagination is tested against behaviour rather than against hand-computed window
 boundaries. The ignored `live_api` tests guard the assumptions that a mock cannot:
 field order, range semantics, weekly grid alignment, and deep history.
 
+---
+
+## Testing strategies on the collected data
+
+`analysis/` is a small Python toolkit that runs trading strategies over the
+archive this collector produces — see [`analysis/README.md`](analysis/README.md).
+
+```bash
+.venv/bin/python -m analysis.run_backtest              # SMA 200 on BTC-USDT 1h, 0.1%/side
+.venv/bin/python -m analysis.run_backtest --list       # strategies, their parameters, stored series
+.venv/bin/python -m analysis.run_backtest --strategy sma-ls --param window=100 --sweep 50,100,200
+.venv/bin/python -m analysis.run_backtest --journal --note "why I ran this"
+.venv/bin/python -m analysis.journal verify            # re-run and compare, for later
+.venv/bin/python -m pytest                             # 147 tests
+```
+
+It reports a strategy against buy & hold over the same window and the same
+costs, writes the trade list, the equity curve, an SVG chart and the metrics into
+`analysis/out/`, and checks two invariants on every run: commissions are charged
+on every change of exposure, and compounding the trades must reproduce the
+equity curve (which is what catches a look-ahead bug — the difference between a
+1.89x and a 1.2-billion-x backtest on this data). Adding a strategy means adding
+one file that maps bars to exposure; the CLI takes its parameters from the
+registry, and the interface and look-ahead tests cover it automatically.
+
+`--journal` keeps a re-checkable record of runs in [`journal/`](journal/README.md),
+which is tracked in the repository: each entry stores the strategy, its
+parameters, the costs, the exact data window with a SHA-256 digest of its bars,
+and the metrics, so `python -m analysis.journal verify` can re-run it later and
+prove the numbers still hold.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
 
 HF_HUB_DISABLE_XET=1 hf download Kizyanov/kcs-klines --repo-type dataset --local-dir ./data
-HF_XET_CLIENT_READ_TIMEOUT=5s HF_XET_CLIENT_RETRY_BASE_DELAY=1s HF_XET_FIXED_UPLOAD_CONCURRENCY=4 
-hf upload Kizyanov/kcs-klines ./data . --type dataset --commit-message "Update KuCoin klines $(date -u +%Y-%m-%d)"
+HF_XET_CLIENT_READ_TIMEOUT=5s HF_XET_CLIENT_RETRY_BASE_DELAY=1s HF_XET_FIXED_UPLOAD_CONCURRENCY=4 uv run hf upload Kizyanov/kcs-klines ./data . --type dataset --commit-message "Update KuCoin klines $(date -u +%Y-%m-%d)"
 
 
