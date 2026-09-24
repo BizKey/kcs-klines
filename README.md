@@ -347,5 +347,8 @@ field order, range semantics, weekly grid alignment, and deep history.
 
 MIT — see [LICENSE](LICENSE).
 
-hf download Kizyanov/kcs-klines --repo-type dataset --local-dir ./data
+HF_HUB_DISABLE_XET=1 hf download Kizyanov/kcs-klines --repo-type dataset --local-dir ./data
+HF_XET_CLIENT_READ_TIMEOUT=5s HF_XET_CLIENT_RETRY_BASE_DELAY=1s HF_XET_FIXED_UPLOAD_CONCURRENCY=4 
 hf upload Kizyanov/kcs-klines ./data . --type dataset --commit-message "Update KuCoin klines $(date -u +%Y-%m-%d)"
+
+
