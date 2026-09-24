@@ -86,6 +86,10 @@ cargo build --release
 ./target/release/kcs-klines init      # writes kcs-klines.toml
 ```
 
+New here (human or agent)? [`AGENTS.md`](AGENTS.md) is the 60-second orientation:
+the layout, the commands, the invariants that keep a backtest honest, and what has
+already been learned the hard way.
+
 Requires a recent stable Rust toolchain (developed against 1.98). No API keys are
 needed: every endpoint used is public market data.
 
