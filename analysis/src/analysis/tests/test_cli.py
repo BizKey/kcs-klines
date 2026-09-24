@@ -75,8 +75,8 @@ def test_list_shows_registered_strategies_with_their_parameters(capsys):
     printed = capsys.readouterr().out
     assert "sma(window=200)" in printed
     assert "sma-ls(window=200)" in printed
-    assert "breakout(lookback=20)" in printed
-    assert "--sweep lookback" in printed
+    assert "breakout(entry=20" in printed
+    assert "--sweep entry" in printed
     assert "series" in printed
 
 

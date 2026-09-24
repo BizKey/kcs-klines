@@ -365,7 +365,9 @@ uv run kcs-backtest --list                             # strategies, their param
 uv run kcs-backtest --strategy sma-ls --param window=100 --sweep 50,100,200
 uv run kcs-backtest --journal --note "why I ran this"
 uv run kcs-journal verify                              # re-run and compare, for later
-uv run pytest                                          # 147 tests
+uv run kcs-walkforward --strategy sma --grid window=50,100,200 --train 3000 --test 1000
+uv run kcs-portfolio --timeframe 1d --lookback 30 --rebalance 30 --top 0.2
+uv run pytest                                          # 241 tests
 ```
 
 It reports a strategy against buy & hold over the same window and the same

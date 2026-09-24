@@ -34,6 +34,10 @@ from .sma_trend import SmaTrend, SmaTrendLongShort
 # Import strategy modules below this line; each registers itself with
 # `@register("name")`. This import is what makes it visible to the CLI.
 from .breakout import DonchianBreakout  # noqa: E402
+from .macd import MacdTrend  # noqa: E402
+from .rsi_reversion import RsiReversion  # noqa: E402
+from .scaled import ScaledStrategy  # noqa: E402
+from .tsmom import Tsmom  # noqa: E402
 
 __all__ = [
     "Strategy",
@@ -41,6 +45,10 @@ __all__ = [
     "SmaTrendLongShort",
     "SmaReversion",
     "DonchianBreakout",
+    "MacdTrend",
+    "RsiReversion",
+    "ScaledStrategy",
+    "Tsmom",
     "REGISTRY",
     "register",
     "get_strategy",

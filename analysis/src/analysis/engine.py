@@ -310,27 +310,34 @@ def run_backtest(
         if pos == prev:
             continue
 
-        # Close the outgoing leg. When the exposure only flips sign, one of the
-        # two sides paid belongs to the incoming leg, so the exit keeps one side.
-        if open_trade is not None:
-            exit_equity = after_costs if pos == 0 else after_costs / (1.0 - rate)
+        # A trade is a holding period: it ends when the exposure reaches zero or
+        # turns around, not when a strategy merely resizes it. Without that,
+        # volatility targeting — which adjusts the size on most bars — would book
+        # thousands of one-bar "trades" that are really one position.
+        if open_trade is not None and (pos == 0 or (pos > 0) != (prev > 0)):
+            # Close the outgoing leg at a real point on the equity curve: the
+            # level just after the commission for this change has been paid. On a
+            # sign flip that level is also where the incoming leg starts, so the
+            # two books meet exactly and compounding the trades still reproduces
+            # the curve.
             open_trade.exit_index = i
             open_trade.exit_time = bars[i].time
             open_trade.exit_price = bars[i].open
-            open_trade.equity_at_exit = exit_equity
+            open_trade.equity_at_exit = after_costs
             open_trade.bars_held = i - open_trade.entry_index
             open_trade.gross_return = (bars[i].open / open_trade.entry_price) ** open_trade.direction - 1.0
-            open_trade.net_return = exit_equity / open_trade.equity_at_entry - 1.0
+            open_trade.net_return = after_costs / open_trade.equity_at_entry - 1.0
             trades.append(open_trade)
             open_trade = None
 
-        if pos != 0:
-            # A trade is measured from just *before* its own entry commission to
-            # just *after* its exit commission, so a round trip carries both
-            # sides of the cost and compounding all trades reproduces the equity
-            # curve. On a sign flip, the first of the two sides paid belongs to
-            # the outgoing leg, so the new basis is one side lower.
-            entry_basis = before_costs if prev == 0 else before_costs * (1.0 - rate)
+        if pos != 0 and open_trade is None:
+            # A trade runs from just *before* its own entry commission to just
+            # *after* its exit commission, so a round trip carries both sides of
+            # the cost and `prod(1 + net_return)` equals the equity curve — for
+            # integer sides and for fractional exposure alike. Anything that
+            # happens inside the trade (a volatility target resizing it, say) is
+            # simply part of the path between those two points.
+            entry_basis = before_costs if prev == 0 else after_costs
             open_trade = Trade(
                 direction=1 if pos > 0 else -1,
                 entry_index=i,

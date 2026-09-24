@@ -29,3 +29,12 @@ addopts = "-q"
 members = [
     "analysis",
 ]
+
+[tool.uv.sources]
+analysis = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "analysis",
+    "pytest>=9.1.1",
+]

@@ -14,7 +14,9 @@ import pytest
 from ..data import Bar, load_series, repo_root
 
 STEP = 3600  # one hour
-START = 1_507_000_000  # an arbitrary hour-aligned timestamp
+# A whole week after the epoch: aligned to every timeframe from 1m to 1w, the way
+# KuCoin's own bar timestamps are. 2017-10-05 00:00 UTC.
+START = 1_507_161_600
 
 
 def make_bars(

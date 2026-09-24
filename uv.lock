@@ -192,8 +192,20 @@ dependencies = [
     { name = "huggingface-hub" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "analysis" },
+    { name = "pytest" },
+]
+
 [package.metadata]
 requires-dist = [{ name = "huggingface-hub", specifier = ">=1.32.0" }]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "analysis", editable = "analysis" },
+    { name = "pytest", specifier = ">=9.1.1" },
+]
 
 [[package]]
 name = "packaging"
