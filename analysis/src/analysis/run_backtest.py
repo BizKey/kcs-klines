@@ -1,23 +1,30 @@
 #!/usr/bin/env python3
 """Run one strategy over one stored kline series and report the result.
 
-Examples::
+Run it with `uv`, which builds the environment from `pyproject.toml` + `uv.lock`
+(no venv to create, activate or remember)::
 
     # the default: SMA 200 on BTC-USDT hourly, 0.1% per side
-    .venv/bin/python -m analysis.run_backtest
+    uv run kcs-backtest
 
     # another symbol, another timeframe, an SMA window sweep
-    .venv/bin/python -m analysis.run_backtest --symbol ETH-USDT --timeframe 4h --sweep 50,100,200
+    uv run kcs-backtest --symbol ETH-USDT --timeframe 4h --sweep 50,100,200
 
     # what the same signals would do without commission
-    .venv/bin/python -m analysis.run_backtest --fee 0
+    uv run kcs-backtest --fee 0
 
     # any registered strategy, with its own parameters
-    .venv/bin/python -m analysis.run_backtest --list
-    .venv/bin/python -m analysis.run_backtest --strategy sma-ls --param window=100
+    uv run kcs-backtest --list
+    uv run kcs-backtest --strategy sma-ls --param window=100
 
     # everything in one JSON, including the equity curve
-    .venv/bin/python -m analysis.run_backtest --json --json-curves
+    uv run kcs-backtest --json --json-curves
+
+    # record the run so it can be re-checked months later
+    uv run kcs-backtest --journal --note "first look at BTC"
+    uv run kcs-journal verify --last 5
+
+`uv run python -m analysis.run_backtest …` is the same entry point spelled out.
 
 Artifacts land in `analysis/out/` (gitignored): a trade list, the equity curve,
 an SVG chart and the metrics. Data is read-only and nothing touches the network.
@@ -29,12 +36,9 @@ import argparse
 import sys
 from pathlib import Path
 
-if __package__ in (None, ""):  # allow `python analysis/run_backtest.py`
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from analysis import Costs, data, engine, journal, report  # noqa: E402
-from analysis.metrics import pct  # noqa: E402
-from analysis.strategies import (  # noqa: E402
+from . import Costs, data, engine, journal, report
+from .metrics import pct
+from .strategies import (
     Strategy,
     available,
     describe_registry,
@@ -43,13 +47,14 @@ from analysis.strategies import (  # noqa: E402
     sweep_parameter,
 )
 
-DATA_DIR = Path("data/kucoin/spot")
-OUT_DIR = Path("analysis/out")
+DATA_DIR = data.DEFAULT_DATA_DIR
+OUT_DIR = data.repo_root() / "analysis" / "out"
 FEE_GRID = (0.0, 0.0002, 0.0005, 0.001, 0.002)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
+        prog="kcs-backtest",
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -250,7 +255,7 @@ def _record(args, result, quality, bars, params: dict, trades_path: Path) -> Non
         entry.trades_file = target.name
     path = journal.append(entry, directory)
     print(f"journalized {entry.run_id} -> {path}")
-    print(f"            verify later with: python -m analysis.journal verify --id {entry.run_id}")
+    print(f"            verify later with: uv run kcs-journal verify --id {entry.run_id}")
 
 
 def _print_recent_trades(result: engine.BacktestResult, count: int = 10) -> None:

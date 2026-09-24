@@ -1,0 +1,25 @@
+[project]
+name = "analysis"
+version = "0.1.0"
+description = "Strategy-testing toolkit for the klines collected by kcs-klines"
+readme = "README.md"
+authors = [
+    { name = "BizKey", email = "toonychannel@gmail.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "pyarrow>=25.0.1",
+]
+
+[project.scripts]
+kcs-backtest = "analysis.run_backtest:main"
+kcs-journal = "analysis.journal:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.18,<0.13.0"]
+build-backend = "uv_build"

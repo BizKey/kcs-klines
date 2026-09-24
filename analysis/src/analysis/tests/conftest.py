@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from ..data import Bar, load_series
+from ..data import Bar, load_series, repo_root
 
 STEP = 3600  # one hour
 START = 1_507_000_000  # an arbitrary hour-aligned timestamp
@@ -96,7 +96,7 @@ def toy_archive(tmp_path: Path) -> Path:
 @pytest.fixture(scope="session")
 def data_dir() -> Path:
     """Root of the parquet archive, skipping real-data tests when it is absent."""
-    root = Path(__file__).resolve().parents[2] / "data" / "kucoin" / "spot"
+    root = repo_root() / "data" / "kucoin" / "spot"
     if not (root / "BTC-USDT" / "1h").is_dir():
         pytest.skip(f"no collected data under {root}")
     return root

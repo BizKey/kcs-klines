@@ -89,6 +89,12 @@ cargo build --release
 Requires a recent stable Rust toolchain (developed against 1.98). No API keys are
 needed: every endpoint used is public market data.
 
+The repository is also a [uv](https://docs.astral.sh/uv/) workspace: the Rust
+collector is the product, and the `analysis/` member is a Python toolkit for
+testing strategies on the data it collects. `uv sync` builds the Python
+environment from `pyproject.toml` + `uv.lock`; the collector itself does not need
+Python at all.
+
 ---
 
 ## How it works
@@ -347,21 +353,24 @@ field order, range semantics, weekly grid alignment, and deep history.
 
 ## Testing strategies on the collected data
 
-`analysis/` is a small Python toolkit that runs trading strategies over the
-archive this collector produces — see [`analysis/README.md`](analysis/README.md).
+`analysis/` is a uv workspace member — a small Python toolkit that runs trading
+strategies over the archive this collector produces, with `pyarrow` for reading
+Parquet and `pytest` for its own tests. See
+[`analysis/README.md`](analysis/README.md) for the details.
 
 ```bash
-.venv/bin/python -m analysis.run_backtest              # SMA 200 on BTC-USDT 1h, 0.1%/side
-.venv/bin/python -m analysis.run_backtest --list       # strategies, their parameters, stored series
-.venv/bin/python -m analysis.run_backtest --strategy sma-ls --param window=100 --sweep 50,100,200
-.venv/bin/python -m analysis.run_backtest --journal --note "why I ran this"
-.venv/bin/python -m analysis.journal verify            # re-run and compare, for later
-.venv/bin/python -m pytest                             # 147 tests
+uv sync                                                # environment from uv.lock
+uv run kcs-backtest                                    # SMA 200 on BTC-USDT 1h, 0.1%/side
+uv run kcs-backtest --list                             # strategies, their parameters, stored series
+uv run kcs-backtest --strategy sma-ls --param window=100 --sweep 50,100,200
+uv run kcs-backtest --journal --note "why I ran this"
+uv run kcs-journal verify                              # re-run and compare, for later
+uv run pytest                                          # 147 tests
 ```
 
 It reports a strategy against buy & hold over the same window and the same
 costs, writes the trade list, the equity curve, an SVG chart and the metrics into
-`analysis/out/`, and checks two invariants on every run: commissions are charged
+`analysis/out/` (gitignored), and checks two invariants on every run: commissions are charged
 on every change of exposure, and compounding the trades must reproduce the
 equity curve (which is what catches a look-ahead bug — the difference between a
 1.89x and a 1.2-billion-x backtest on this data). Adding a strategy means adding
@@ -371,8 +380,8 @@ registry, and the interface and look-ahead tests cover it automatically.
 `--journal` keeps a re-checkable record of runs in [`journal/`](journal/README.md),
 which is tracked in the repository: each entry stores the strategy, its
 parameters, the costs, the exact data window with a SHA-256 digest of its bars,
-and the metrics, so `python -m analysis.journal verify` can re-run it later and
-prove the numbers still hold.
+and the metrics, so `uv run kcs-journal verify` can re-run it later and prove the
+numbers still hold.
 
 ## License
 

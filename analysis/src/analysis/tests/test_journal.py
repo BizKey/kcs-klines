@@ -461,7 +461,7 @@ def test_cli_rejects_an_unknown_run_id(archive, tmp_path):
 
 def test_the_journal_directory_is_not_gitignored(tmp_path):
     """The user keeps the journal in the repository, so it must be trackable."""
-    repo = Path(__file__).resolve().parents[2]
+    repo = data.repo_root()
     if not (repo / ".git").is_dir():
         pytest.skip("not a git checkout")
     probe = subprocess.run(

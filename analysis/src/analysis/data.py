@@ -14,7 +14,21 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 
-DEFAULT_DATA_DIR = Path("data/kucoin/spot")
+def repo_root() -> Path:
+    """The checkout this package lives in, or the working directory as a fallback.
+
+    Used for the two locations that belong to the repository rather than to
+    wherever the command happens to be run from: the kline archive and the
+    trade journal.
+    """
+    for parent in Path(__file__).resolve().parents:
+        if (parent / ".git").exists():
+            return parent
+    return Path.cwd()
+
+
+#: Kline archive written by `kcs-klines backfill`.
+DEFAULT_DATA_DIR = repo_root() / "data" / "kucoin" / "spot"
 
 #: Fixed-length timeframes, in seconds. `1mon` is deliberately absent: its bars
 #: are 28-31 days long, so it is handled as a calendar step instead.

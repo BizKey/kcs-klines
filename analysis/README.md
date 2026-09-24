@@ -4,15 +4,22 @@ A small, dependency-light toolkit that answers one question over and over:
 **what would this strategy have done on this data, once you pay for trading?**
 
 ```bash
-.venv/bin/python -m analysis.run_backtest                        # SMA 200 on BTC-USDT 1h
-.venv/bin/python -m analysis.run_backtest --symbol ETH-USDT --timeframe 4h --sweep 50,100,200
-.venv/bin/python -m analysis.run_backtest --fee 0                # same signals, no commission
-.venv/bin/python -m analysis.run_backtest --list                 # strategies, parameters, series
-.venv/bin/python -m analysis.run_backtest --strategy sma-ls --param window=100
-.venv/bin/python -m analysis.run_backtest --journal --note "why I ran this"
-.venv/bin/python -m analysis.journal verify                      # re-check what was recorded
-.venv/bin/python -m pytest                                       # 143 tests
+uv sync                          # create/refresh the environment from uv.lock
+uv run kcs-backtest              # SMA 200 on BTC-USDT 1h, 0.1% per side
+uv run kcs-backtest --symbol ETH-USDT --timeframe 4h --sweep 50,100,200
+uv run kcs-backtest --fee 0      # same signals, no commission
+uv run kcs-backtest --list       # strategies, their parameters, stored series
+uv run kcs-backtest --strategy sma-ls --param window=100
+uv run kcs-backtest --journal --note "why I ran this"
+uv run kcs-journal verify        # re-check what was recorded
+uv run pytest                    # 147 tests
 ```
+
+`analysis` is a [uv](https://docs.astral.sh/uv/) workspace member: the root
+project collects data, this one tests strategies against it. `uv run` uses the
+environment described by `pyproject.toml` + `uv.lock` — nothing to activate — and
+`uv run python -m analysis.run_backtest` is an exact equivalent of
+`uv run kcs-backtest`.
 
 Strategy parameters are generic: `--param NAME=VALUE` (repeatable) and
 `--sweep [NAME=]V1,V2,…`. Nothing in the CLI knows about any particular
@@ -25,6 +32,20 @@ Parquet under `data/kucoin/spot/<SYMBOL>/<TIMEFRAME>/`.
 ---
 
 ## Layout
+
+`analysis` is a uv workspace member with a `src` layout, so the importable
+package is `analysis/src/analysis/` and its tests travel with it:
+
+```
+analysis/
+├── pyproject.toml          # this package: pyarrow, dev pytest, the two console scripts
+├── README.md
+├── out/                    # artifacts (gitignored)
+└── src/analysis/
+    ├── data.py  metrics.py  engine.py  report.py  journal.py  run_backtest.py
+    ├── strategies/         # one module per strategy + the registry
+    └── tests/              # pytest suite, inside the package on purpose
+```
 
 | file | what lives there |
 |---|---|
@@ -42,6 +63,26 @@ Parquet under `data/kucoin/spot/<SYMBOL>/<TIMEFRAME>/`.
 | `run_backtest.py` | the CLI that ties it together |
 | `out/` | artifacts (gitignored) |
 | `tests/` | pytest suite: engine contracts, registry-wide strategy checks, CLI end-to-end on a temp archive, and a regression test against the real archive |
+
+Tests sit inside the package because they exercise internals directly
+(`from ..engine import …`) and belong to the same import tree; a test module is
+never imported by the package itself.
+
+### Running it with uv
+
+```bash
+uv sync                     # create/refresh .venv from pyproject.toml + uv.lock
+uv run kcs-backtest …       # console script declared in analysis/pyproject.toml
+uv run kcs-journal …        # the other one
+uv run pytest               # tests (config lives in the root pyproject.toml)
+uv add --package analysis some-package          # a new runtime dependency
+uv add --package analysis --dev some-dev-tool   # a new dev dependency
+```
+
+`uv run` re-syncs the environment first, so a fresh clone needs nothing but
+`uv sync` (or just the first `uv run`). Without uv, the equivalent is
+`python -m analysis.run_backtest` inside an environment that has `pyarrow`
+installed — the package itself is pip-installable from `analysis/`.
 
 ---
 
@@ -86,7 +127,7 @@ registration. Nothing else: the CLI, the report, the artifacts and the contract
 tests pick the strategy up from the registry.
 
 ```python
-# analysis/strategies/breakout.py — this exact file ships with the toolkit
+# analysis/src/analysis/strategies/breakout.py — this exact file ships with the toolkit
 from ..data import Bar
 from .base import Strategy
 from .registry import register          # NOT `from . import register`: that is a cycle
@@ -131,7 +172,7 @@ def _breakout(lookback: int = 20, **_: object) -> Strategy:
     return DonchianBreakout(lookback=lookback)
 ```
 
-Then add one line to `analysis/strategies/__init__.py` so the package imports
+Then add one line to `analysis/src/analysis/strategies/__init__.py` so the package imports
 your module (or import it yourself before calling the CLI):
 
 ```python
@@ -139,14 +180,14 @@ from .breakout import DonchianBreakout
 ```
 
 ```bash
-.venv/bin/python -m analysis.run_backtest --list
+uv run kcs-backtest --list
 #   breakout(lookback=20)   [--sweep lookback]
 #       Long on a new N-bar high, flat otherwise.
-.venv/bin/python -m analysis.run_backtest --strategy breakout --param lookback=30
-.venv/bin/python -m analysis.run_backtest --strategy breakout --sweep 10,20,40
+uv run kcs-backtest --strategy breakout --param lookback=30
+uv run kcs-backtest --strategy breakout --sweep 10,20,40
 ```
 
-`analysis/strategies/breakout.py` is itself that example, already registered and
+`analysis/src/analysis/strategies/breakout.py` is itself that example, already registered and
 already covered by the tests — copy it as a starting point.
 
 Two rules keep this from breaking:
@@ -167,7 +208,7 @@ typo with the list of valid names — before loading any data.
 | execution, costs, equity curve, trades, drawdown, Sharpe | `engine.py` owns all of it |
 | report line, CSV/JSON/SVG artifacts, `--json` | `report.py` |
 | `--param`, `--sweep`, `--list`, unknown-name errors | the registry |
-| interface + no-look-ahead tests | the registry is looped over by `tests/test_strategies.py` |
+| interface + no-look-ahead tests | the registry is looped over by `src/analysis/tests/test_strategies.py` |
 | the invariant "trade book = equity curve" | checked on every run, reported as `bookkeeping_error` |
 
 Two things a strategy must get right on its own:
@@ -192,12 +233,12 @@ exact data window with a SHA-256 digest of its OHLCV values, the full metric set
 and your own note:
 
 ```bash
-.venv/bin/python -m analysis.run_backtest --strategy sma --param window=200 \
+uv run kcs-backtest --strategy sma --param window=200 \
     --journal --note "reference run before touching the engine"
 
-.venv/bin/python -m analysis.journal report        # table of runs, per-strategy roll-up
-.venv/bin/python -m analysis.journal verify        # re-run everything and compare
-.venv/bin/python -m analysis.journal show --id 20260924T191341Z-sma200
+uv run kcs-journal report        # table of runs, per-strategy roll-up
+uv run kcs-journal verify        # re-run everything and compare
+uv run kcs-journal show --id 20260924T191341Z-sma200
 ```
 
 `verify` reloads the archive, **slices it back to the recorded window**, rebuilds

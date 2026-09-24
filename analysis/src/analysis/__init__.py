@@ -12,23 +12,26 @@ Layers, lowest first:
 * `analysis.engine`     — execution, costs, trades, equity curve, invariants;
 * `analysis.strategies` — pluggable strategies (see `analysis.strategies.base`);
 * `analysis.report`     — console report plus CSV/JSON/SVG artifacts;
-* `analysis.journal`    — an append-only, re-checkable record of runs (import
-  it explicitly: `from analysis import journal`; keeping it out of this module's
-  imports is what lets `python -m analysis.journal` run without a runpy warning).
+* `analysis.journal`    — an append-only, re-checkable record of runs.
+
+`journal` and `run_backtest` are deliberately *not* imported here: keeping them
+out of this module's imports is what lets `python -m analysis.journal` and
+`python -m analysis.run_backtest` run without a `runpy` re-import warning.
 
 Quick start::
 
     from analysis import Costs, data, engine
     from analysis.strategies import get_strategy
 
-    bars = data.load_series("data/kucoin/spot", "BTC-USDT", "1h")
+    bars = data.load_series(data.DEFAULT_DATA_DIR, "BTC-USDT", "1h")
     strategy = get_strategy("sma", window=200)
     result = engine.run_backtest(bars, strategy.targets(bars), "1h", Costs(fee_per_side=0.001))
     print(result.label, result.performance.cagr, result.bookkeeping_error)
 
-Or from the command line::
+Or from the command line, with `uv` doing the environment work::
 
-    .venv/bin/python -m analysis.run_backtest --symbol BTC-USDT --timeframe 1h
+    uv run kcs-backtest --strategy sma --param window=200
+    uv run kcs-journal report
 """
 
 from __future__ import annotations
@@ -45,7 +48,6 @@ __all__ = [
     "Strategy",
     "Trade",
     "available",
-    "fingerprint",
     "buy_and_hold",
     "get_strategy",
     "pct",

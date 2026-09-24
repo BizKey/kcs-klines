@@ -1,7 +1,7 @@
 [project]
 name = "kcs-klines"
 version = "0.1.0"
-description = "Add your description here"
+description = "Historical KuCoin Spot OHLCV collector: resumable REST backfill into partitioned Parquet (Zstd)"
 readme = "README.md"
 authors = [
     { name = "BizKey", email = "toonychannel@gmail.com" }
@@ -19,6 +19,13 @@ requires = ["uv_build>=0.12.18,<0.13.0"]
 build-backend = "uv_build"
 
 [tool.pytest.ini_options]
-# The strategy-testing toolkit lives in analysis/ (see analysis/README.md).
-testpaths = ["analysis/tests"]
+# The strategy-testing toolkit is the `analysis` workspace member; its tests live
+# inside the package (see analysis/README.md). Run them from the repo root with
+# `uv run pytest`.
+testpaths = ["analysis/src/analysis/tests"]
 addopts = "-q"
+
+[tool.uv.workspace]
+members = [
+    "analysis",
+]

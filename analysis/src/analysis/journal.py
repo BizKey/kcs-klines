@@ -25,10 +25,10 @@ Layout, all plain text and diff-friendly so it can live in the repository::
 
 Usage::
 
-    python -m analysis.run_backtest --journal --note "first look at BTC"
-    python -m analysis.journal report
-    python -m analysis.journal verify --last 5
-    python -m analysis.journal show --id 20260924T221530Z-sma200
+    uv run kcs-backtest --journal --note "first look at BTC"
+    uv run kcs-journal report
+    uv run kcs-journal verify --last 5
+    uv run kcs-journal show --id 20260924T221530Z-sma200
 """
 
 from __future__ import annotations
@@ -51,7 +51,7 @@ from .strategies import get_strategy
 JOURNAL_FORMAT = 1
 
 #: `journal/` next to the repository root, independent of the working directory.
-DEFAULT_JOURNAL_DIR = Path(__file__).resolve().parent.parent / "journal"
+DEFAULT_JOURNAL_DIR = data.repo_root() / "journal"
 
 RUNS_FILE = "runs.jsonl"
 VERIFICATIONS_FILE = "verifications.jsonl"
@@ -610,7 +610,7 @@ def journal_dir_for(raw: str | None) -> Path:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        prog="python -m analysis.journal",
+        prog="kcs-journal",
         description="Read, verify and summarise the trade journal.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,

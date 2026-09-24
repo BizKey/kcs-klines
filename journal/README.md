@@ -4,6 +4,9 @@ An append-only record of backtest runs, kept in the repository so it survives
 laptop reinstalls and can be re-checked months later. Written and verified by
 `analysis/journal.py`; every file here is plain text and diff-friendly.
 
+Commands below assume you are in the repository root with the uv environment
+synced (`uv sync`, or just let the first `uv run` do it).
+
 ```
 journal/
   runs.jsonl            one JSON object per run, append-only
@@ -15,7 +18,7 @@ journal/
 ## Recording a run
 
 ```bash
-.venv/bin/python -m analysis.run_backtest --strategy sma-rev --journal --note "why I ran this"
+uv run kcs-backtest --strategy sma-rev --journal --note "why I ran this"
 ```
 
 `--journal` alone writes into this directory; `--journal some/other/dir` puts it
@@ -24,10 +27,10 @@ elsewhere. Recording is explicit: nothing is written unless you ask for it.
 ## Reading it
 
 ```bash
-.venv/bin/python -m analysis.journal report            # table of runs + per-strategy roll-up
-.venv/bin/python -m analysis.journal show --id 20260924T221530Z-sma200
-.venv/bin/python -m analysis.journal verify            # re-run everything and compare
-.venv/bin/python -m analysis.journal verify --last 5   # or just the newest few
+uv run kcs-journal report            # table of runs + per-strategy roll-up
+uv run kcs-journal show --id 20260924T221530Z-sma200
+uv run kcs-journal verify            # re-run everything and compare
+uv run kcs-journal verify --last 5   # or just the newest few
 ```
 
 `verify` exits non-zero when anything fails, so it can sit in CI.
