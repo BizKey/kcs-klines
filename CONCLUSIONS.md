@@ -11,96 +11,26 @@ the condition is stated.
 
 ---
 
-## 1. The five facts that decide everything
+## 1. The four dials, in order of leverage
 
-Ordered by how much they change an outcome.
+These are ordered by how much they move an outcome, and the order is itself a
+result: the *frequency* of decisions beats the *cost* of trading, and the choice
+of signal is not on the list at all because it is worth +0.006 Sharpe across 976
+series — a coin flip. Read them as four dials, not four facts:
 
-### 1.1 Costs, not signals
+1. **how often you decide** (§1.1) — worth +0.38 Sharpe, and it is a filter, not a
+   discount: the weekly grid wins at a 0.00% fee as well as at 0.20%.
+2. **what you are allowed to trade** (§1.2) — the universe decides whether the
+   median outcome is a dying listing or a surviving one.
+3. **how much you trade** (§1.3) — once the structure is set, turnover decides the
+   net result; at 0.25% per round trip, 250 trades a year costs 62.5% of capital.
+4. **how much is in the market** (§1.5, §1.6) — exposure sets the drawdown, and it
+   scales return and drawdown together rather than improving either.
 
-KuCoin spot VIP0 is not 0.1% for everyone: class A is 0.1/0.1% maker/taker, class
-B is 0.2/0.2, class C is 0.3/0.3, and the archive splits **496 A / 236 B / 264 C**
-— half of all pairs cost more than 0.1% per side before anything else.
+What actually works is in §1.4, what the distribution looks like is in §1.5, and
+what was killed by measurement is in §2.
 
-Round trip for a $10,000 order, fees plus estimated impact, by the pair's daily
-turnover:
-
-| daily turnover | round trip |
-|---|---|
-| ≥ $1M | **0.25%** |
-| $100k – $1M | 0.55% |
-| $10k – $100k | 1.69% |
-| < $10k | **15.02%** |
-
-And the same tax expressed as annual drag at 0.25% per round trip: 12 trades a
-year costs **3.0%**, 50 trades **12.5%**, 250 trades **62.5%** of capital per
-year. This is why the archive's headline experiment looks the way it does — SMA
-200 on BTC-USDT 1h makes 1,268 trades: gross +2,293.6%, net **+89.1%** against
-+1,851.3% for holding; the same rule on daily bars makes 30 trades and returns
-+1,114%.
-
-**Consequence:** a rule has to trade rarely and only on liquid pairs. No entry
-logic measured here comes close to outweighing this.
-
-### 1.2 The universe is a graveyard, and the cross-section ranks it by pulse
-
-996 pairs, of which the top 10 are 61.7% of all turnover and the top 200 are 94%.
-The median pair has a maximum drawdown of **−97.5%**, is underwater 99% of the
-time, and has a median daily return of −0.21%. Since 2023-10-06 the median pair
-is at **0.31x** while BTC is 3.02x, SOL 4.91x, XRP 2.86x, ETH 1.63x; 81% of pairs
-are in the red and the median maximum drawdown is −82.1%. Half a year after
-listing, only 25% of pairs are above their day-one price and the median is
-**−49.9%**.
-
-**Consequence:** any statistic over "all assets" is dominated by dying listings,
-and any rule that *selects* from the whole universe selects them on purpose.
-Cross-sectional momentum over all pairs returned **−81.2%** against −47.4% for
-equal weighting; restricted to the top 5 by momentum it returned +2.6% over nine
-years while paying 46.8% of capital in commission and drawing down −97.4%.
-
-### 1.3 Trend following on liquid survivors is the only thing that survived
-
-The rule: long while the price is above where it was 30 days ago, decided once a
-week, flat otherwise, spot, no leverage, no stops. Across the whole archive, with
-the rule expressed in calendar time on every timeframe:
-
-| timeframe | bars | series | median window | median return | profitable | median Sharpe | beats holding | median DD |
-|---|---|---|---|---|---|---|---|---|
-| 1h | 720/168 | 976 | 2.4 y | −17.5% | 38% | −0.14 | **88%** | −75% |
-| 4h | 180/42 | 974 | 2.4 y | −18.9% | 38% | −0.15 | **89%** | −75% |
-| 1d | 30/7 | 966 | 2.5 y | −24.5% | 35% | −0.22 | 88% | −75% |
-| 1w | 4/1 | 916 | 2.6 y | −29.7% | 33% | −0.25 | **89%** | −73% |
-| 1mon | 1/1 | 602 | 4.4 y | −53.5% | 24% | −0.42 | 85% | −76% |
-
-The median asset loses money (−26.3% whole-archive) — but holding that same
-median asset loses three times more (median buy & hold **−88.4%**, drawdown
-−97%). TSMOM beats holding on return for **88%** of series and on Sharpe for 79%,
-halving both drawdown and volatility (73% against 129%).
-
-**It is a risk-reduction rule, not a money printer.** 35% of series are
-profitable, the median Sharpe is −0.22, and only 9% clear Sharpe 0.5.
-
-### 1.4 The positive mean is a handful of assets
-
-| trimming | mean return | median |
-|---|---|---|
-| everything | +136.4% | −26.3% |
-| without top 0.1% (4 series) | +117.0% | −26.4% |
-| without top 1% (44) | +65.4% | −26.9% |
-| without top 5% (221) | +7.7% | −31.0% |
-| without top 10% (443) | **−15.1%** | −35.2% |
-
-The top 1% of series account for **52%** of the summed profit. This is the same
-shape seen inside a single series (the best 5% of trades produced 87% of the
-profit in the candle-and-volume study). Never quote the mean without the trade
-count and the window next to it.
-
-History length separates the two populations cleanly (1h): 2–3 years → median
-−46.4%, 3–5 years → −7.4%, 5–7 years → **+31.9%**, 7+ years → **+43.8%**. Short
-histories are recent listings that mostly die; long ones have already survived.
-Taking only series with 5+ years: 1,186 series, 50% profitable, **92% beat
-holding**, median Sharpe 0.00, median 29 trades.
-
-### 1.5 The grid, not the signal
+### 1.1 Frequency, not the signal
 
 The rule everyone calls "trend following" is two decisions: *what* to compare the
 price with, and *how often* to look. Measured separately, on 976 hourly series
@@ -186,6 +116,91 @@ the right *ballpark* (weekly beats daily and monthly for both signals) and is no
 worth optimising: each extra candidate in the grid is another chance to pick a
 noise winner. Set it, do not tune it — the opposite of what one expects from a
 parameter that buys the most.
+
+### 1.2 The universe is a graveyard, and the cross-section ranks it by pulse
+
+996 pairs, of which the top 10 are 61.7% of all turnover and the top 200 are 94%.
+The median pair has a maximum drawdown of **−97.5%**, is underwater 99% of the
+time, and has a median daily return of −0.21%. Since 2023-10-06 the median pair
+is at **0.31x** while BTC is 3.02x, SOL 4.91x, XRP 2.86x, ETH 1.63x; 81% of pairs
+are in the red and the median maximum drawdown is −82.1%. Half a year after
+listing, only 25% of pairs are above their day-one price and the median is
+**−49.9%**.
+
+**Consequence:** any statistic over "all assets" is dominated by dying listings,
+and any rule that *selects* from the whole universe selects them on purpose.
+Cross-sectional momentum over all pairs returned **−81.2%** against −47.4% for
+equal weighting; restricted to the top 5 by momentum it returned +2.6% over nine
+years while paying 46.8% of capital in commission and drawing down −97.4%.
+
+### 1.3 Costs
+
+KuCoin spot VIP0 is not 0.1% for everyone: class A is 0.1/0.1% maker/taker, class
+B is 0.2/0.2, class C is 0.3/0.3, and the archive splits **496 A / 236 B / 264 C**
+— half of all pairs cost more than 0.1% per side before anything else.
+
+Round trip for a $10,000 order, fees plus estimated impact, by the pair's daily
+turnover:
+
+| daily turnover | round trip |
+|---|---|
+| ≥ $1M | **0.25%** |
+| $100k – $1M | 0.55% |
+| $10k – $100k | 1.69% |
+| < $10k | **15.02%** |
+
+And the same tax expressed as annual drag at 0.25% per round trip: 12 trades a
+year costs **3.0%**, 50 trades **12.5%**, 250 trades **62.5%** of capital per
+year. This is why the archive's headline experiment looks the way it does — SMA
+200 on BTC-USDT 1h makes 1,268 trades: gross +2,293.6%, net **+89.1%** against
++1,851.3% for holding; the same rule on daily bars makes 30 trades and returns
++1,114%.
+
+**Consequence:** a rule has to trade rarely and only on liquid pairs. No entry
+logic measured here comes close to outweighing this.
+
+### 1.4 Trend following on liquid survivors is the only thing that survived
+
+The rule: long while the price is above where it was 30 days ago, decided once a
+week, flat otherwise, spot, no leverage, no stops. Across the whole archive, with
+the rule expressed in calendar time on every timeframe:
+
+| timeframe | bars | series | median window | median return | profitable | median Sharpe | beats holding | median DD |
+|---|---|---|---|---|---|---|---|---|
+| 1h | 720/168 | 976 | 2.4 y | −17.5% | 38% | −0.14 | **88%** | −75% |
+| 4h | 180/42 | 974 | 2.4 y | −18.9% | 38% | −0.15 | **89%** | −75% |
+| 1d | 30/7 | 966 | 2.5 y | −24.5% | 35% | −0.22 | 88% | −75% |
+| 1w | 4/1 | 916 | 2.6 y | −29.7% | 33% | −0.25 | **89%** | −73% |
+| 1mon | 1/1 | 602 | 4.4 y | −53.5% | 24% | −0.42 | 85% | −76% |
+
+The median asset loses money (−26.3% whole-archive) — but holding that same
+median asset loses three times more (median buy & hold **−88.4%**, drawdown
+−97%). TSMOM beats holding on return for **88%** of series and on Sharpe for 79%,
+halving both drawdown and volatility (73% against 129%).
+
+**It is a risk-reduction rule, not a money printer.** 35% of series are
+profitable, the median Sharpe is −0.22, and only 9% clear Sharpe 0.5.
+
+### 1.5 The positive mean is a handful of assets
+
+| trimming | mean return | median |
+|---|---|---|
+| everything | +136.4% | −26.3% |
+| without top 0.1% (4 series) | +117.0% | −26.4% |
+| without top 1% (44) | +65.4% | −26.9% |
+| without top 5% (221) | +7.7% | −31.0% |
+| without top 10% (443) | **−15.1%** | −35.2% |
+
+The top 1% of series account for **52%** of the summed profit. This is the same
+shape seen inside a single series (the best 5% of trades produced 87% of the
+profit in the candle-and-volume study). Never quote the mean without the trade
+count and the window next to it.
+
+History length separates the two populations cleanly (1h): 2–3 years → median
+−46.4%, 3–5 years → −7.4%, 5–7 years → **+31.9%**, 7+ years → **+43.8%**. Short
+histories are recent listings that mostly die; long ones have already survived.
+Taking only series with 5+ years: 1,186 series, 50% profitable, **92% beat
+holding**, median Sharpe 0.00, median 29 trades.
 
 ### 1.6 Diversifying the same rule across liquid survivors is where it works
 

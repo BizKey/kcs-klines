@@ -23,7 +23,7 @@ class SmaTrend(Strategy):
     every-bar mapping is a plain list comprehension over aligned data, and pushing
     it through the grid machinery would quietly change what a monthly series does.
     The measurement that makes the parameter worth having is in
-    `CONCLUSIONS.md` §1.6: on 976 hourly series the weekly grid is worth about
+    `CONCLUSIONS.md` §1.1: on 976 hourly series the weekly grid is worth about
     +0.39 Sharpe for this rule and for TSMOM alike, while the choice of signal is
     worth +0.006.
     """
