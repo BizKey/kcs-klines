@@ -13,6 +13,7 @@ dependencies = [
 
 [project.scripts]
 kcs-backtest = "analysis.run_backtest:main"
+kcs-basket = "analysis.basket:main"
 kcs-journal = "analysis.journal:main"
 kcs-walkforward = "analysis.walkforward:main"
 kcs-portfolio = "analysis.portfolio:main"

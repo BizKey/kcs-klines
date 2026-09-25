@@ -301,9 +301,12 @@ def run_portfolio(
             ratio = end / start
             growth += weight * (ratio - 1.0)
             drifted[symbol] = weight * ratio
-        if drifted:
-            drifted = {symbol: amount / growth for symbol, amount in drifted.items()}
         value_after = equity[-1] * growth
+        # Normalise the drifted book back to the capital it now represents, so
+        # the weights sum to it again (1 for a long-only book, 0 for long/short)
+        # and the turnover below measures a trade rather than a price move.
+        # Dividing twice here charged commission for a position that was merely
+        # held: a single holding that tripled paid 61% turnover per rebalance.
         if growth > 0 and drifted:
             drifted = {symbol: amount / growth for symbol, amount in drifted.items()}
 

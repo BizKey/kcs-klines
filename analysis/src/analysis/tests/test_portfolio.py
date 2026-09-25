@@ -197,6 +197,30 @@ def test_a_stable_selection_trades_less_than_a_rotating_one():
     assert rotating.rebalances[1].turnover == pytest.approx(2.0)
 
 
+def test_holding_a_position_is_never_charged_for_its_own_price_move():
+    """Regression: the drifted book was normalised twice.
+
+    A book that had risen was thereby under-weighted, so every rebalance paid
+    commission to "top it back up". A single holding that rose 3% a day booked
+    61% turnover per rebalance while it was in fact never traded.
+    """
+    dates = daily_dates(count=6)
+    panel = portfolio.build_panel(*series([0.03] * 500), "UP-USDT", dates, 30 * STEP)
+    result = portfolio.run_portfolio(
+        [panel], dates, lookback=30, rebalance=30, top=1, costs=Costs(fee_per_side=0.001)
+    )
+    # Bought once, then held: only the very first rebalance trades at all, so the
+    # whole bill is one side of that one purchase.
+    assert result.rebalances[0].turnover == pytest.approx(1.0)
+    assert all(r.turnover == pytest.approx(0.0) for r in result.rebalances[1:])
+    assert result.fees_paid == pytest.approx(0.001)
+    # With no further trading the curve is the symbol's own price path, entered
+    # one rebalance after the signal that chose it and paying one side to get in.
+    assert result.performance.total_return == pytest.approx(
+        (panel.closes[-1] / panel.closes[1]) * (1.0 - 0.001) - 1.0
+    )
+
+
 def test_a_symbol_without_a_bar_keeps_its_last_price_and_says_so():
     # A series that stops early: the later rebalances have no bar for it.
     times, closes = series([0.02] * 120)

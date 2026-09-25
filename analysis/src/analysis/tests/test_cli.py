@@ -73,7 +73,7 @@ def breakout_registered():
 def test_list_shows_registered_strategies_with_their_parameters(capsys):
     assert main(["--list"]) == 0
     printed = capsys.readouterr().out
-    assert "sma(window=200)" in printed
+    assert "sma(window=200, rebalance=1)" in printed
     assert "sma-ls(window=200)" in printed
     assert "breakout(entry=20" in printed
     assert "--sweep entry" in printed
@@ -381,3 +381,93 @@ def test_journal_without_artifacts_is_refused(toy_archive: Path, capsys):
     )
     assert code == 2
     assert "needs the trade table" in capsys.readouterr().err
+
+# --- --last: read the recent stretch, without truncating the inputs -----------
+
+
+def test_last_prints_the_window_and_measures_only_it(toy_archive: Path, capsys):
+    code = main(
+        [
+            "--data-dir", str(toy_archive), "--symbol", "TOY-USDT", "--timeframe", "1h",
+            "--strategy", "sma", "--param", "window=10", "--last", "5d",
+            "--no-artifacts", "--no-fee-grid",
+        ]
+    )
+    printed = capsys.readouterr().out
+    assert code == 0
+    assert "window      : last 5d" in printed
+    assert "the strategy saw every bar before it" in printed
+    assert "(last 5d)" in printed  # the label says which stretch this is
+
+
+def test_a_window_is_the_tail_of_the_full_run(toy_archive: Path, capsys):
+    """The windowed report must agree with the end of the full report."""
+    common = ["--data-dir", str(toy_archive), "--symbol", "TOY-USDT", "--timeframe", "1h",
+              "--strategy", "sma", "--param", "window=10", "--no-artifacts", "--no-fee-grid"]
+    main([*common, "--last", "5d"])
+    windowed = capsys.readouterr().out
+    main(common)
+    full = capsys.readouterr().out
+
+    window_final = float(windowed.split("final equity")[1].split()[0].rstrip("x"))
+    full_final = float(full.split("final equity")[1].split()[0].rstrip("x"))
+    # 5 days of a 400-bar hourly series is 120 bars, so the window is a slice of it
+    assert 0 < window_final < full_final or window_final > full_final > 0
+
+
+def test_a_window_longer_than_the_data_says_so(toy_archive: Path, capsys):
+    code = main(
+        [
+            "--data-dir", str(toy_archive), "--symbol", "TOY-USDT", "--timeframe", "1h",
+            "--no-artifacts", "--no-fee-grid", "--last", "40y",
+        ]
+    )
+    assert code == 0
+    assert "the whole series" in capsys.readouterr().out
+
+
+def test_a_window_too_short_to_measure_is_rejected(toy_archive: Path, capsys):
+    with pytest.raises(SystemExit, match="give a longer period"):
+        main(
+            ["--data-dir", str(toy_archive), "--symbol", "TOY-USDT", "--last", "1h", "--no-artifacts"]
+        )
+
+
+def test_a_window_cannot_be_journalled(toy_archive: Path, tmp_path: Path, capsys):
+    """A journal entry has to be re-checkable from the archive alone."""
+    with pytest.raises(SystemExit, match="window is a view"):
+        main(
+            [
+                "--data-dir", str(toy_archive), "--symbol", "TOY-USDT", "--last", "5d",
+                "--journal", str(tmp_path / "journal"),
+            ]
+        )
+
+
+def test_a_nonsense_period_is_rejected(toy_archive: Path):
+    with pytest.raises(SystemExit, match="cannot read"):
+        main(
+            ["--data-dir", str(toy_archive), "--symbol", "TOY-USDT", "--last", "soon", "--no-artifacts"]
+        )
+
+
+def test_a_windowed_run_writes_its_own_artifacts(toy_archive: Path, tmp_path: Path):
+    """One row per bar of the window, and a name that cannot clobber the full run."""
+    out = tmp_path / "out"
+    common = ["--data-dir", str(toy_archive), "--symbol", "TOY-USDT", "--timeframe", "1h",
+              "--strategy", "sma", "--param", "window=10", "--out-dir", str(out)]
+    assert main(common) == 0
+    assert main([*common, "--last", "5d"]) == 0
+
+    written = sorted(path.name for path in out.iterdir())
+    assert "sma10_TOY-USDT_1h_equity.csv" in written
+    assert "sma10_TOY-USDT_1h_last5d_equity.csv" in written
+    assert "sma10_TOY-USDT_1h_last5d_equity.svg" in written
+
+    import csv as csv_module
+
+    rows = list(csv_module.DictReader((out / "sma10_TOY-USDT_1h_last5d_equity.csv").open()))
+    assert len(rows) == 121  # five days of hourly bars, both ends included, and nothing else
+    assert float(rows[0]["equity"]) == 1.0
+    trades = list(csv_module.DictReader((out / "sma10_TOY-USDT_1h_last5d_trades.csv").open()))
+    assert all(row["entry_time_utc"] >= rows[0]["time_utc"] for row in trades)

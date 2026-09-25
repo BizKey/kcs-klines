@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 from . import Costs, data, engine, journal, report
@@ -50,6 +51,62 @@ from .strategies import (
 DATA_DIR = data.DEFAULT_DATA_DIR
 OUT_DIR = data.repo_root() / "analysis" / "out"
 FEE_GRID = (0.0, 0.0002, 0.0005, 0.001, 0.002)
+
+
+@dataclass(frozen=True)
+class Window:
+    """The stretch of a series a run reports on, from `--last` onward."""
+
+    seconds: int
+    text: str
+    bars: int
+    full: bool
+
+    @classmethod
+    def of(cls, bars, timeframe: str, spec: str) -> Window:
+        """`--last 1y` -> the last 365 days of `bars`, measured from its last bar."""
+        try:
+            seconds = data.parse_duration(spec)
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from None
+        inside = [bar for bar in bars if bar.time >= bars[-1].time - seconds]
+        full = len(inside) == len(bars)
+        if not full and len(inside) < 3:
+            raise SystemExit(
+                f"--last {spec} leaves {len(inside)} bar(s) of {timeframe}: give a longer period"
+            )
+        return cls(seconds=seconds, text=spec, bars=len(inside), full=full)
+
+    def line(self, bars) -> str:
+        """One line for the console, so nobody has to guess what was measured."""
+        if self.full:
+            return (
+                f"window      : the whole series — the last {self.text} is longer than the "
+                f"{len(bars):,} bars on disk"
+            )
+        first = next(bar for bar in bars if bar.time >= bars[-1].time - self.seconds)
+        return (
+            f"window      : last {self.text} — {data.iso(first.time)} .. {data.iso(bars[-1].time)} UTC, "
+            f"{self.bars:,} of {len(bars):,} bars; the strategy saw every bar before it"
+        )
+
+    def bars_of(self, bars):
+        """The bars this window reports on — what the artifact writers must get.
+
+        They line up their output with the curve, one row per bar, so handing them
+        the whole series while the result holds only the window is an off-by-a-lot
+        (`write_equity` raises `IndexError` on it).
+        """
+        if self.full:
+            return bars
+        return [bar for bar in bars if bar.time >= bars[-1].time - self.seconds]
+
+    def quality(self, bars, timeframe: str) -> data.QualityReport:
+        return data.data_quality(self.bars_of(bars), timeframe)
+
+    def stem_suffix(self) -> str:
+        """`_last1y` — so a windowed run cannot overwrite the full run's artifacts."""
+        return "" if self.full else f"_last{self.text}"
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -80,6 +137,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         metavar="[NAME=]V1,V2,…",
         help="run one parameter over several values, e.g. --sweep 50,100 or --sweep window=50,100",
+    )
+    parser.add_argument(
+        "--last",
+        default=None,
+        metavar="PERIOD",
+        help="report only the last stretch, e.g. 1y, 6mon, 30d, 12h (the strategy still sees "
+             "all the history before it)",
     )
     parser.add_argument("--no-fee-grid", action="store_true", help="skip the commission sensitivity table")
     parser.add_argument("--data-dir", type=Path, default=DATA_DIR, help="root of the parquet archive")
@@ -160,9 +224,27 @@ def parse_sweep(raw: str, strategy: str) -> tuple[str, list[object]]:
     return name, parsed
 
 
-def run(bars, strategy: Strategy, timeframe: str, costs: Costs):
-    label = f"{strategy.slug}"
-    return engine.run_backtest(bars, strategy.targets(bars), timeframe, costs, label=label)
+def run(bars, strategy: Strategy, timeframe: str, costs: Costs, window: Window | None = None):
+    """One strategy over one series, optionally reported for the last stretch only.
+
+    The run itself always sees the whole history — that is what makes the signals
+    the ones the strategy really had — and `window` then slices the *result*:
+    rebased to 1.0 where the window starts, with the benchmark re-entered at the
+    window's second open and fees restated against the capital the window began
+    with. Truncating the input instead would leave the indicators cold.
+    """
+    result = engine.run_backtest(
+        bars, strategy.targets(bars), timeframe, costs, label=strategy.slug
+    )
+    if window is None or window.full:
+        return result
+    return engine.restrict(
+        result,
+        bars,
+        timeframe,
+        first=bars[-1].time - window.seconds,
+        label=f"{strategy.slug} (last {window.text})",
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -185,23 +267,36 @@ def main(argv: list[str] | None = None) -> int:
     params = parse_params(args.param, args.strategy)
     sweep = parse_sweep(args.sweep, args.strategy) if args.sweep else None
 
+    if args.last and args.journal is not None:
+        raise SystemExit(
+            "--journal records a run that can be re-checked from the archive alone, and a "
+            "window is a view of a longer run: journal the full run, then read the window off it"
+        )
+
     bars = data.load_series(args.data_dir, args.symbol, args.timeframe)
     quality = data.data_quality(bars, args.timeframe)
     costs = Costs(fee_per_side=args.fee, slippage_per_side=args.slippage)
     strategy = strategy_for(args.strategy, params)
+    window = Window.of(bars, args.timeframe, args.last) if args.last else None
 
-    result = run(bars, strategy, args.timeframe, costs)
+    result = run(bars, strategy, args.timeframe, costs, window)
     print(f"loaded {quality.bars:,} bars from {len(data.series_files(args.data_dir, args.symbol, args.timeframe))} files")
-    print(report.render(args.symbol, args.timeframe, quality, result))
+    if window is not None:
+        print(window.line(bars))
+    print(
+        report.render(
+            args.symbol, args.timeframe, window.quality(bars, args.timeframe) if window else quality, result
+        )
+    )
     print()
     print(f"strategy    : {strategy.describe()}")
 
     _print_recent_trades(result)
 
     if sweep:
-        _print_sweep(args, bars, costs, params, sweep)
+        _print_sweep(args, bars, costs, params, sweep, window)
     if not args.no_fee_grid:
-        _print_fee_grid(args, bars, strategy)
+        _print_fee_grid(args, bars, strategy, window)
 
     if args.no_artifacts:
         if args.journal is not None:
@@ -209,15 +304,15 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         return 0
 
-    stem = f"{strategy.slug}_{args.symbol}_{args.timeframe}"
+    stem = f"{strategy.slug}_{args.symbol}_{args.timeframe}{window.stem_suffix() if window else ''}"
     trades_path = args.out_dir / f"{stem}_trades.csv"
     equity_path = args.out_dir / f"{stem}_equity.csv"
     chart_path = args.out_dir / f"{stem}_equity.svg"
     report.write_trades(trades_path, result)
-    report.write_equity(equity_path, bars, result)
+    report.write_equity(equity_path, window.bars_of(bars) if window else bars, result)
     report.write_chart(
         chart_path,
-        bars,
+        window.bars_of(bars) if window else bars,
         result,
         f"{args.symbol} {args.timeframe} — {strategy.slug} ({result.costs})",
     )
@@ -278,37 +373,44 @@ def _print_sweep(
     costs: Costs,
     params: dict[str, object],
     sweep: tuple[str, list[object]],
+    window: Window | None = None,
 ) -> None:
     name, values = sweep
     print()
     print(f"parameter sweep over {name} (net, same fee and execution):")
     print(f"  {name:>8}{'trades':>9}{'total':>12}{'CAGR':>10}{'maxDD':>10}{'Sharpe':>9}{'exposure':>10}")
     for value in values:
-        attempt = run(bars, strategy_for(args.strategy, params, **{name: value}), args.timeframe, costs)
+        attempt = run(
+            bars, strategy_for(args.strategy, params, **{name: value}), args.timeframe, costs, window
+        )
         perf = attempt.performance
         print(
             f"  {str(value):>8}{len(attempt.closed_trades):>9}{pct(perf.total_return):>12}"
             f"{pct(perf.cagr):>10}{pct(perf.max_dd):>10}{perf.sharpe:>9.2f}{pct(attempt.exposure):>10}"
         )
-    bench = run(bars, strategy_for(args.strategy, params), args.timeframe, costs).benchmark.performance
+    bench = run(bars, strategy_for(args.strategy, params), args.timeframe, costs, window).benchmark.performance
     print(
         f"  {'B&H':>8}{1:>9}{pct(bench.total_return):>12}{pct(bench.cagr):>10}"
         f"{pct(bench.max_dd):>10}{bench.sharpe:>9.2f}{'100.00%':>10}"
     )
 
 
-def _print_fee_grid(args: argparse.Namespace, bars, strategy: Strategy) -> None:
+def _print_fee_grid(
+    args: argparse.Namespace, bars, strategy: Strategy, window: Window | None = None
+) -> None:
     print()
     print("commission sensitivity (net, same signals):")
     print(f"  {'fee/side':>9}{'trades':>9}{'final equity':>16}{'total':>14}{'CAGR':>10}")
     for fee in FEE_GRID:
-        sweep = run(bars, strategy, args.timeframe, Costs(fee_per_side=fee, slippage_per_side=args.slippage))
+        sweep = run(
+            bars, strategy, args.timeframe, Costs(fee_per_side=fee, slippage_per_side=args.slippage), window
+        )
         perf = sweep.performance
         print(
             f"  {fee:>9.2%}{len(sweep.closed_trades):>9}{perf.final_equity:>15.4f}x"
             f"{pct(perf.total_return):>14}{pct(perf.cagr):>10}"
         )
-    bench = run(bars, strategy, args.timeframe, Costs(fee_per_side=args.fee)).benchmark.performance
+    bench = run(bars, strategy, args.timeframe, Costs(fee_per_side=args.fee), window).benchmark.performance
     print(
         f"  {'B&H':>9}{1:>9}{bench.final_equity:>15.4f}x"
         f"{pct(bench.total_return):>14}{pct(bench.cagr):>10}"

@@ -31,7 +31,10 @@ __all__ = [
     "BacktestResult",
     "Benchmark",
     "run_backtest",
+    "restrict",
     "buy_and_hold",
+    "buy_and_hold_bars",
+    "fees_in_window",
     "close_fill_final_equity",
     "bookkeeping_warning",
 ]
@@ -413,18 +416,40 @@ def bookkeeping_warning(result: BacktestResult) -> str | None:
 
 
 def buy_and_hold(bars: list[Bar], costs: Costs | None = None, timeframe: str = "1d") -> Benchmark:
-    """Passive benchmark: buy the first bar's open, sell the last bar's close.
+    """Passive benchmark over a whole series: see `buy_and_hold_bars`."""
+    return buy_and_hold_bars(bars, timeframe, costs)
 
-    It pays the same two sides of commission as a strategy round trip, so the
-    comparison is like for like. The risk statistics (volatility, Sharpe,
-    drawdown) come from the price path itself, because two one-off commissions
-    are a drag on the outcome rather than per-bar risk; the headline return is
-    net of both sides.
+
+def buy_and_hold_bars(
+    bars: list[Bar], timeframe: str = "1d", costs: Costs | None = None
+) -> Benchmark:
+    """Passive benchmark: buy at the first open *any* strategy could have used.
+
+    The entry is the **second** bar's open, not the first's. Every strategy in
+    this toolkit reads its signal from a bar's close and is filled at the next
+    bar's open, so `open[1]` is the earliest price a strategy can trade at — and
+    the benchmark has to start from the same place, or the comparison flatters
+    it. On a listing bar the gap is not a rounding detail: PYTH-USDT's first
+    hourly bar ran from 0.06 to 0.319 (`close/open` 5.3x), so a benchmark entered
+    at `open[0]` was handed a move nobody could have traded and reported +13.5%
+    for a series that fell 78.8% from the first price actually available.
+
+    The curve keeps one point per bar so it lines up with the strategy's: bar 0
+    is cash at 1.0, the position is bought at `open[1]` and sold at the last
+    close, paying one commission side at each end. The risk statistics
+    (volatility, Sharpe, drawdown) come from the price path itself, because two
+    one-off commissions are a drag on the outcome rather than per-bar risk; the
+    headline return is net of both sides.
+
+    Callers that measure a *window* — `kcs-basket` on every leg, `restrict` on a
+    backtest — pass that window's bars, so the same rule decides the same way
+    there: the benchmark enters one bar into the window, never at its first bar.
     """
     if not bars:
         raise ValueError("no bars to benchmark")
     costs = costs or Costs()
-    equity = [b.close / bars[0].open for b in bars]
+    base = bars[1].open if len(bars) > 1 else bars[0].open
+    equity = [1.0] + [bar.close / base for bar in bars[1:]]
     perf = performance(
         equity,
         bars_per_year_of(timeframe),
@@ -438,6 +463,133 @@ def buy_and_hold(bars: list[Bar], costs: Costs | None = None, timeframe: str = "
         cagr=cagr(net_final, perf.years),
     )
     return Benchmark(equity=equity, performance=perf, gross_equity=equity[-1])
+
+
+def fees_in_window(run: BacktestResult, rate: float, start_index: int) -> float:
+    """Commission the engine charged from `start_index` on, in units of equity 1.0.
+
+    The engine only reports the total for the run, and a run may be longer than
+    the window being reported; this recovers the part inside the window from the
+    same identity the engine uses — `equity[i]` is `before_costs` times
+    `(1 − rate)^turnover` — which `test_engine.py` checks against the reported
+    total when the window covers the whole series.
+    """
+    if rate <= 0:
+        return 0.0
+    paid = 0.0
+    for i in range(max(start_index, 1), len(run.equity)):
+        if run.equity[i] <= 0:  # wiped out here: the engine stops charging
+            continue
+        turn = abs(run.positions[i] - run.positions[i - 1])
+        if turn:
+            paid += rate * turn * run.equity[i] / (1.0 - rate) ** turn
+    return paid
+
+
+def restrict(
+    result: BacktestResult,
+    bars: list[Bar],
+    timeframe: str,
+    *,
+    first: int,
+    label: str | None = None,
+) -> BacktestResult:
+    """The part of a run inside `[first, the end]`, rebased to 1.0 at its start.
+
+    Slicing the *result* rather than the *input* is the whole point: the strategy
+    still saw every bar before the window, so its signals are the ones it really
+    had — truncating the series instead would leave the indicators cold and
+    invent a different history. Nothing after `first` is dropped from what came
+    before it, and nothing after the last bar was ever read.
+
+    Everything a reader looks at is then window-relative, in the same way the
+    basket is: the curve starts at 1.0, the benchmark enters at the window's
+    second open (`buy_and_hold_bars` on the window), fees are restated against
+    the capital the window started with, and a position that was already open
+    when the window began is carried in as a partial trade so that compounding
+    the trade book still reproduces the curve exactly.
+    """
+    inside = [i for i, bar in enumerate(bars) if bar.time >= first]
+    if len(inside) < 3:
+        raise ValueError(
+            f"the window starting {iso(bars[inside[0]].time) if inside else 'after the end'} "
+            f"holds {len(inside)} bar(s): that is not enough to measure anything"
+        )
+    start, end = inside[0], inside[-1]
+    base = result.equity[start]
+    if base <= 0:
+        raise ValueError("the account was already wiped out when the window opened")
+    if start == 0:
+        return result  # the window is the whole run: nothing to rebase
+
+    window = [bars[i] for i in inside]
+    times = [bar.time for bar in window]
+    per_year = bars_per_year_of(timeframe)
+
+    equity = [result.equity[i] / base for i in inside]
+    equity[-1] = result.performance.final_equity / base  # the open position, marked to market
+    positions = [result.positions[i] for i in inside]
+    targets = [result.targets[i] for i in inside]
+
+    trades: list[Trade] = []
+    for trade in result.trades:
+        if trade.entry_index >= start:
+            trades.append(trade)
+            continue
+        if trade.exit_index is None or trade.exit_index < start:
+            continue
+        trades.append(_carried_trade(trade, bars, start, base))
+
+    gross = 1.0
+    for k in range(1, len(inside)):
+        gross *= 1.0 + positions[k - 1] * (bars[inside[k]].open / bars[inside[k - 1]].open - 1.0)
+    gross *= 1.0 + positions[-1] * (window[-1].close / window[-1].open - 1.0)
+
+    perf = performance(equity, per_year, final_equity=equity[-1], timestamps=times)
+    restricted = BacktestResult(
+        label=label or result.label,
+        targets=targets,
+        positions=positions,
+        equity=equity,
+        trades=trades,
+        costs=result.costs,
+        fees_paid=fees_in_window(result, result.costs.rate, start) / base,
+        performance=perf,
+        gross_equity=gross,
+        benchmark=buy_and_hold_bars(window, timeframe, result.costs),
+        close_fill_equity=close_fill_final_equity(window, targets, result.costs),
+        warnings=list(result.warnings),
+    )
+    if any(t.entry_index == start and t.equity_at_entry == 1.0 and t.bars_held for t in trades):
+        restricted.warnings.append(
+            "a position was already open when the window began: it is shown as a trade from "
+            "the window's first bar, and its earlier history is not part of this window"
+        )
+    warning = bookkeeping_warning(restricted)
+    if warning:
+        restricted.warnings.append(warning)
+    return restricted
+
+
+def _carried_trade(trade: Trade, bars: list[Bar], start: int, base: float) -> Trade:
+    """A position held when the window opened, as a trade that starts with it."""
+    exit_price = trade.exit_price if trade.exit_price is not None else bars[-1].close
+    gross = (exit_price / bars[start].open) ** trade.direction - 1.0
+    return Trade(
+        direction=trade.direction,
+        entry_index=start,
+        entry_time=bars[start].time,
+        entry_price=bars[start].open,
+        equity_at_entry=1.0,
+        exit_index=trade.exit_index,
+        exit_time=trade.exit_time,
+        exit_price=exit_price,
+        equity_at_exit=(trade.equity_at_exit or 0.0) / base,
+        bars_held=(trade.exit_index - start) if trade.exit_index is not None else None,
+        gross_return=gross,
+        net_return=((trade.equity_at_exit or 0.0) / base) - 1.0,
+        open_at_end=trade.open_at_end,
+    )
 
 
 def close_fill_final_equity(bars: list[Bar], targets: list[float], costs: Costs | None = None) -> float:

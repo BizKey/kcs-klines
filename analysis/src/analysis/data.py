@@ -90,6 +90,52 @@ def day(ts: int) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
 
 
+#: How long each suffix means, in seconds. `m` is a minute and `mon` a month —
+#: the trading convention, because "1m" on a chart is a one-minute bar.
+DURATIONS: dict[str, int] = {
+    "s": 1,
+    "sec": 1,
+    "second": 1,
+    "m": 60,
+    "min": 60,
+    "minute": 60,
+    "h": 3600,
+    "hour": 3600,
+    "d": 86400,
+    "day": 86400,
+    "w": 7 * 86400,
+    "week": 7 * 86400,
+    "mon": 30 * 86400,
+    "month": 30 * 86400,
+    "y": 365 * 86400,
+    "year": 365 * 86400,
+}
+
+
+def parse_duration(text: str) -> int:
+    """`"1y"` -> 31536000, `"30d"` -> 2592000, `"6 mon"` -> 15552000.
+
+    Used by `--last`, so the flag reads the way a person writes it. Months and
+    years are fixed lengths (30 and 365 days) on purpose: a calendar month would
+    make `--last 1mon` mean something different on every run. A capital `M` is a
+    month and a small `m` a minute, because that is what they mean on every chart
+    — and a silent ten-thousand-fold error is worth one case-sensitive branch.
+    """
+    cleaned = text.strip()
+    digits = ""
+    for character in cleaned:
+        if character.isdigit() or character == ".":
+            digits += character
+        else:
+            break
+    suffix = cleaned[len(digits) :].strip()
+    key = "mon" if suffix == "M" else suffix.lower()
+    if not digits or key not in DURATIONS:
+        known = ", ".join(sorted({"1s", "1m", "1h", "1d", "1w", "1mon", "1y"}))
+        raise ValueError(f"cannot read {text!r} as a duration; try one of {known} (e.g. 30d)")
+    return int(float(digits) * DURATIONS[key])
+
+
 def is_known_timeframe(timeframe: str) -> bool:
     return timeframe in FIXED_TIMEFRAMES or timeframe in CALENDAR_TIMEFRAMES
 

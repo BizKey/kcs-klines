@@ -6,6 +6,7 @@ import pathlib
 
 import pytest
 
+from ..strategies.tsmom import on_decision_grid
 from ..strategies import (
     REGISTRY,
     SmaTrend,
@@ -66,7 +67,7 @@ def test_strategy_metadata_is_stable():
     strategy = SmaTrend(window=50)
     assert strategy.slug == "sma50"
     assert strategy.name == "sma"
-    assert strategy.params == {"window": 50}
+    assert strategy.params == {"window": 50, "rebalance": 1}
     assert "SMA(50)" in strategy.describe()
     assert str(strategy) == "sma50"
     assert isinstance(strategy, Strategy)
@@ -123,7 +124,7 @@ def test_every_registered_strategy_honours_the_interface():
 
 
 def test_registry_parameters_come_from_the_factory_signature():
-    assert parameters("sma") == {"window": 200}
+    assert parameters("sma") == {"window": 200, "rebalance": 1}
     assert parameters("sma-ls") == {"window": 200}
     with pytest.raises(KeyError, match="available"):
         parameters("nope")
@@ -136,7 +137,7 @@ def test_registry_knows_which_parameter_to_sweep():
 
 def test_registry_describes_itself():
     described = "\n".join(describe_registry())
-    assert "sma(window=200)" in described
+    assert "sma(window=200, rebalance=1)" in described
     assert "--sweep window" in described
     assert "SMA" in described
 
@@ -657,7 +658,7 @@ def test_vol_target_wrapper_metadata():
     sized = ScaledStrategy(SmaTrend(window=200), target_vol=0.4)
     assert sized.slug == "vt0.4-sma200"
     assert sized.warmup == 200  # the wrapper adds no warm-up of its own
-    assert sized.params["inner"] == {"window": 200}
+    assert sized.params["inner"] == {"window": 200, "rebalance": 1}
     assert sized.params["target_vol"] == 0.4
     assert "annualised volatility" in sized.describe()
     with pytest.raises(ValueError, match="target_vol"):
@@ -688,3 +689,56 @@ def test_a_vol_targeted_run_still_reconciles_its_trade_book():
     result = run_backtest(bars, sized.targets(bars), "1h", Costs(fee_per_side=0.001), label=sized.slug)
     assert result.bookkeeping_error < 1e-9
     assert result.exposure < 1.0  # never fully invested at this budget
+
+
+# --- the multi-horizon blend --------------------------------------------------
+
+
+def test_the_blend_has_horizons_of_one_two_four_and_eight_weeks():
+    blend = get_strategy("tsmom-blend")
+    assert blend.lookbacks == (168, 336, 672, 1344)
+    assert blend.warmup == 1344
+    assert "168, 336, 672, 1344" in blend.describe()
+    assert blend.slug == "blend168x4-168"
+
+
+def test_the_blend_needs_a_majority_of_its_horizons():
+    """Horizons of 1, 2, 4 and 8 bars: three positive is long, two is not."""
+    blend = get_strategy("tsmom-blend", base=1, horizons=4, rebalance=1)
+    three_up = make_bars([100.0, 140.0, 100.0, 100.0, 100.0, 100.0, 100.0, 110.0, 120.0, 130.0])
+    assert blend.scores(three_up)[7] is None  # the longest horizon has no history yet
+    assert blend.scores(three_up)[-1] == pytest.approx(0.5)
+    assert blend.targets(three_up)[-1] == 1.0
+
+    two_up = make_bars([200.0, 200.0, 130.0, 130.0, 160.0, 160.0, 90.0, 90.0, 90.0, 110.0])
+    assert blend.scores(two_up)[-1] == 0.0  # a coin toss
+    assert blend.targets(two_up)[-1] == 0.0  # and a coin toss stays in cash
+
+
+def test_the_blend_and_the_single_rule_share_their_decision_grid():
+    """Same scores in, same decision dates out — the grid lives in one place."""
+    bars = make_bars(wavy(600))
+    scores = [None if i < 200 else (1.0 if i % 200 < 100 else -1.0) for i in range(len(bars))]
+    blend_targets = on_decision_grid(scores, bars, 168)
+    single = get_strategy("tsmom", lookback=200, rebalance=168)
+    # the single rule reads a different score, but off the same grid: every change
+    # it makes must also be a grid point the helper picked
+    single_targets = single.targets(bars)
+    single_changes = {i for i in range(1, len(bars)) if single_targets[i] != single_targets[i - 1]}
+    helper_changes = {i for i in range(1, len(bars)) if blend_targets[i] != blend_targets[i - 1]}
+    assert helper_changes <= {i for i in range(1, len(bars))}
+    assert all(bars[i].time % (168 * 3600) == 0 for i in single_changes | helper_changes)
+
+
+def test_the_blend_rejects_a_single_horizon():
+    with pytest.raises(ValueError, match="at least two horizons"):
+        get_strategy("tsmom-blend", horizons=1)
+
+
+def test_decision_grids_are_validated():
+    bars = make_bars(wavy(50))
+    with pytest.raises(ValueError, match="scores for"):
+        on_decision_grid([1.0], bars, 10)
+    with pytest.raises(ValueError, match="at least 1 bar"):
+        on_decision_grid([None] * len(bars), bars, 0)
+    assert on_decision_grid([None] * len(bars), bars, 10) == [0.0] * len(bars)

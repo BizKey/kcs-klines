@@ -129,3 +129,29 @@ def test_real_archive_exposes_series_pairs(data_dir):
     pairs = data.available_series(data_dir)
     assert ("BTC-USDT", "1h") in pairs
     assert len(pairs) > 100
+
+
+# --- durations, for `--last` --------------------------------------------------
+
+
+def test_a_duration_is_read_the_way_a_person_writes_it():
+    assert data.parse_duration("1y") == 365 * 86400
+    assert data.parse_duration("30d") == 30 * 86400
+    assert data.parse_duration("12h") == 12 * 3600
+    assert data.parse_duration("90m") == 90 * 60
+    assert data.parse_duration("2w") == 14 * 86400
+    assert data.parse_duration("6 mon") == 180 * 86400
+    assert data.parse_duration("1month") == 30 * 86400
+    assert data.parse_duration("0.5y") == int(0.5 * 365 * 86400)
+
+
+def test_a_capital_m_is_a_month_and_a_small_one_a_minute():
+    """The one case-sensitive branch, because the mistake is a factor of 43,200."""
+    assert data.parse_duration("1M") == 30 * 86400
+    assert data.parse_duration("1m") == 60
+
+
+def test_a_duration_that_makes_no_sense_is_rejected():
+    for text in ("", "1", "y", "1y2", "soon", "5 parsecs", "-3d"):
+        with pytest.raises(ValueError, match="cannot read"):
+            data.parse_duration(text)

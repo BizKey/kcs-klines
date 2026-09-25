@@ -18,7 +18,29 @@ from .metrics import pct
 WIDTH = 1100
 HEIGHT = 420
 
-__all__ = ["render", "write_trades", "write_equity", "write_chart", "write_metrics"]
+#: Curve colours, in the order the curves are given to `write_curves`.
+CURVE_COLORS = ("#1a73e8", "#9aa0a6", "#188038", "#d93025", "#f9ab00", "#9334e6")
+
+#: Vertical marker colours: into the market, out of it, and through zero.
+MARKER_ENTRY = "#137333"
+MARKER_EXIT = "#c5221f"
+MARKER_FLIP = "#8430ce"
+
+#: A marker is `(index into times, colour, tooltip text)`.
+Marker = tuple[int, str, str]
+
+__all__ = [
+    "render",
+    "write_trades",
+    "write_equity",
+    "write_chart",
+    "write_curves",
+    "write_metrics",
+    "position_markers",
+    "MARKER_ENTRY",
+    "MARKER_EXIT",
+    "MARKER_FLIP",
+]
 
 
 def render(
@@ -160,27 +182,117 @@ def write_metrics(path: Path, result: BacktestResult, quality: QualityReport, sy
 
 
 def write_chart(path: Path, bars: list[Bar], result: BacktestResult, title: str) -> None:
-    """Equity vs benchmark on a log scale, as a dependency-free SVG."""
+    """Equity vs benchmark on a log scale, as a dependency-free SVG.
+
+    Every change of position is marked with a vertical line, so the curve can be
+    read against what the strategy did: a run that spends most of its return on a
+    handful of entries is visible at a glance, and so is a year of churn. The
+    final level of each curve gets a dashed horizontal line and its multiple,
+    which is the number the report prints.
+    """
+    strategy_label = f"{result.label} (net)"
+    benchmark_label = "buy & hold (net)"
+    write_curves(
+        path,
+        [bar.time for bar in bars],
+        {strategy_label: result.equity, benchmark_label: result.benchmark.equity},
+        title,
+        colors={strategy_label: "#1a73e8", benchmark_label: "#9aa0a6"},
+        markers=position_markers([bar.time for bar in bars], result.positions),
+        levels={
+            strategy_label: result.performance.final_equity,
+            benchmark_label: result.benchmark.performance.final_equity,
+        },
+    )
+
+
+def position_markers(times: list[int], positions: list[float]) -> list[Marker]:
+    """One marker per bar where the *position* changed, not per resize.
+
+    Entering, leaving and flipping are different events and get different colours.
+    A strategy that only resizes — volatility targeting adjusts the exposure on
+    nearly every bar — would otherwise turn the chart into a solid block of lines,
+    which is why a change of size within the same position is not marked.
+    """
+    if len(times) != len(positions):
+        raise ValueError(f"got {len(positions)} positions for {len(times)} times")
+    markers: list[Marker] = []
+    for i in range(1, len(positions)):
+        previous, current = positions[i - 1], positions[i]
+        if current == previous:
+            continue
+        if previous == 0:
+            colour, what = MARKER_ENTRY, "into the market"
+        elif current == 0:
+            colour, what = MARKER_EXIT, "out of the market"
+        elif (current > 0) != (previous > 0):
+            colour, what = MARKER_FLIP, "flipped"
+        else:
+            continue  # the same position, held at a different size
+        markers.append((i, colour, f"{iso(times[i])} UTC — {what} ({previous:g} → {current:g})"))
+    return markers
+
+
+def write_curves(
+    path: Path,
+    times: list[int],
+    curves: dict[str, list[float]],
+    title: str,
+    *,
+    colors: dict[str, str] | None = None,
+    markers: list[Marker] | None = None,
+    levels: dict[str, float] | None = None,
+) -> None:
+    """Several curves on one log-scale chart, as a dependency-free SVG.
+
+    Every curve needs exactly one value per entry in `times`; the first is drawn
+    thicker, because it is the one being asked about. `markers` draws vertical
+    lines behind the curves at the given indices, and `levels` draws a dashed
+    horizontal line with its multiple at the end value of the named curve — the
+    headline figure, which is what a reader wants off the chart without doing
+    arithmetic on a log axis. A curve that reaches zero — an account wiped out by
+    a geared position — is drawn on the axis floor rather than crashing the log
+    scale, and labels are XML-escaped so an `&` in a symbol or a strategy name
+    cannot corrupt the file.
+    """
+    if not times or not curves:
+        raise ValueError("nothing to plot")
+    for label, values in curves.items():
+        if len(values) != len(times):
+            raise ValueError(f"curve {label!r} has {len(values)} points for {len(times)} times")
+    marks = list(markers or [])
+    for index, _, _ in marks:
+        if not 0 <= index < len(times):
+            raise ValueError(f"marker index {index} is outside 0..{len(times) - 1}")
+    for label, level in (levels or {}).items():
+        if label not in curves:
+            raise ValueError(f"level given for {label!r}, which is not one of the curves")
+        if level <= 0:
+            raise ValueError(f"level for {label!r} must be positive to sit on a log scale")
+    positive = [value for values in curves.values() for value in values if value > 0]
+    if not positive:
+        raise ValueError("every curve is at or below zero: nothing to draw on a log scale")
+
     path.parent.mkdir(parents=True, exist_ok=True)
     pad_l, pad_r, pad_t, pad_b = 70, 24, 40, 40
-    equity = result.equity
-    benchmark = result.benchmark.equity
-    # ~1 point per pixel is plenty at this width and keeps the file small.
-    step = max(1, len(bars) // (WIDTH - pad_l - pad_r))
-    idx = sorted(set(list(range(0, len(bars), step)) + [len(bars) - 1]))
-    values = [equity[i] for i in idx] + [benchmark[i] for i in idx]
-    lo_exp = math.floor(math.log10(min(values)) * 4) / 4
-    hi_exp = math.ceil(math.log10(max(values)) * 4) / 4
+    # A wiped-out curve sits just under the lowest real value instead of at -inf.
+    floor = min(positive) / 2
+    lo_exp = math.floor(math.log10(min(positive)) * 4) / 4
+    hi_exp = math.ceil(math.log10(max(positive)) * 4) / 4
     span = (hi_exp - lo_exp) or 1.0
+    n = len(times)
+    # ~1 point per pixel is plenty at this width and keeps the file small.
+    step = max(1, n // (WIDTH - pad_l - pad_r))
+    idx = sorted(set(list(range(0, n, step)) + [n - 1]))
 
     def x(i: int) -> float:
-        return pad_l + (WIDTH - pad_l - pad_r) * i / (len(bars) - 1)
+        return pad_l + (WIDTH - pad_l - pad_r) * i / (n - 1) if n > 1 else pad_l
 
-    def y(v: float) -> float:
-        return pad_t + (HEIGHT - pad_t - pad_b) * (1 - (math.log10(v) - lo_exp) / span)
+    def y(value: float) -> float:
+        return pad_t + (HEIGHT - pad_t - pad_b) * (1 - (math.log10(max(value, floor)) - lo_exp) / span)
 
-    def poly(series: list[float]) -> str:
-        return " ".join(f"{x(i):.2f},{y(series[i]):.2f}" for i in idx)
+    def poly(values: list[float]) -> str:
+        return " ".join(f"{x(i):.2f},{y(values[i]):.2f}" for i in idx)
 
     grid = []
     for decade in range(int(math.floor(lo_exp)), int(math.ceil(hi_exp)) + 1):
@@ -196,22 +308,89 @@ def write_chart(path: Path, bars: list[Bar], result: BacktestResult, title: str)
             )
     axis = []
     for k in range(6):
-        i = round((len(bars) - 1) * k / 5)
+        i = round((n - 1) * k / 5)
         axis.append(
             f'<text x="{x(i):.2f}" y="{HEIGHT - pad_b + 20}" font-size="12" fill="#666" '
-            f'text-anchor="middle">{day(bars[i].time)}</text>'
+            f'text-anchor="middle">{day(times[i])}</text>'
         )
 
+    legend = []
+    lines = []
+    level_lines = []
+    for position, (label, values) in enumerate(curves.items()):
+        colour = (colors or {}).get(label) or CURVE_COLORS[position % len(CURVE_COLORS)]
+        lines.append(
+            f'<polyline fill="none" stroke="{colour}" stroke-width="{1.8 if position == 0 else 1.6}" '
+            f'points="{poly(values)}"/>'
+        )
+        legend.append(
+            f'<text x="{WIDTH - pad_r}" y="{pad_t + 12 + 16 * position}" font-size="12" '
+            f'font-family="sans-serif" fill="{colour}" text-anchor="end">{_xml(label)}</text>'
+        )
+        if levels and label in levels:
+            level = levels[label]
+            # The multiple sits at the left, just above its line: the right-hand
+            # side belongs to the legend, and a curve that ends high would collide
+            # with it there.
+            level_lines.append(
+                f'<g class="final-level"><title>{_xml(f"{label} ends at {level:,.2f}x")}</title>'
+                f'<line x1="{pad_l}" y1="{y(level):.2f}" x2="{WIDTH - pad_r}" y2="{y(level):.2f}" '
+                f'stroke="{colour}" stroke-width="1" stroke-dasharray="6 4" stroke-opacity="0.8"/></g>'
+                f'<text x="{pad_l + 4}" y="{y(level) - 4:.2f}" font-size="12" font-weight="bold" '
+                f'font-family="sans-serif" fill="{colour}">{level:,.2f}x</text>'
+            )
+
+    # Position changes go behind the curves; the more of them there are, the
+    # fainter each one is, so an active rule cannot blacken its own chart.
+    changes = []
+    if marks:
+        opacity = max(0.15, min(0.9, 40.0 / len(marks)))
+        for index, colour, label in marks:
+            changes.append(
+                f'<g class="position-change"><title>{_xml(label)}</title>'
+                f'<line x1="{x(index):.2f}" y1="{pad_t}" x2="{x(index):.2f}" y2="{HEIGHT - pad_b}" '
+                f'stroke="{colour}" stroke-width="1" stroke-opacity="{opacity:.2f}"/></g>'
+            )
+        counted = [
+            (MARKER_ENTRY, "in", "green"),
+            (MARKER_EXIT, "out", "red"),
+            (MARKER_FLIP, "flip", "purple"),
+        ]
+        tally = ", ".join(
+            f"{word} = {name} ({sum(1 for _, colour, _ in marks if colour == target)})"
+            for target, word, name in counted
+            if any(colour == target for _, colour, _ in marks)
+        )
+        key_text = f"position changes: {tally}"
+    else:
+        key_text = ""
+
+    body = "\n".join(lines)
+    key = "\n".join(legend)
+    mark_svg = "\n".join(changes)
+    level_svg = "\n".join(level_lines)
+    footer = (
+        f'<text x="{pad_l}" y="{HEIGHT - 6}" font-size="11" font-family="sans-serif" '
+        f'fill="#666">{_xml(key_text)}</text>'
+        if key_text
+        else ""
+    )
     path.write_text(
         f"""<svg xmlns="http://www.w3.org/2000/svg" width="{WIDTH}" height="{HEIGHT}" viewBox="0 0 {WIDTH} {HEIGHT}">
 <rect width="{WIDTH}" height="{HEIGHT}" fill="#ffffff"/>
-<text x="{pad_l}" y="24" font-size="15" font-family="sans-serif" fill="#111">{title}</text>
+<text x="{pad_l}" y="24" font-size="15" font-family="sans-serif" fill="#111">{_xml(title)}</text>
 {''.join(grid)}{''.join(axis)}
-<polyline fill="none" stroke="#9aa0a6" stroke-width="1.6" points="{poly(benchmark)}"/>
-<polyline fill="none" stroke="#1a73e8" stroke-width="1.8" points="{poly(equity)}"/>
-<text x="{WIDTH - pad_r}" y="{pad_t + 12}" font-size="12" font-family="sans-serif" fill="#1a73e8" text-anchor="end">{result.label} (net)</text>
-<text x="{WIDTH - pad_r}" y="{pad_t + 28}" font-size="12" font-family="sans-serif" fill="#9aa0a6" text-anchor="end">buy &amp; hold (net)</text>
+{mark_svg}
+{body}
+{level_svg}
+{key}
+{footer}
 <line x1="{pad_l}" y1="{HEIGHT - pad_b}" x2="{WIDTH - pad_r}" y2="{HEIGHT - pad_b}" stroke="#bbb"/>
 </svg>
 """
     )
+
+
+def _xml(text: str) -> str:
+    """`&` in a symbol or a strategy name must not break the SVG."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")

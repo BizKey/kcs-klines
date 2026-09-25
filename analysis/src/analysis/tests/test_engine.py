@@ -8,9 +8,20 @@ trading costs. Both are pinned down here.
 
 from __future__ import annotations
 
+import math
+
 import pytest
 
-from ..engine import Costs, bookkeeping_warning, buy_and_hold, close_fill_final_equity, run_backtest
+from ..engine import (
+    Costs,
+    bookkeeping_warning,
+    buy_and_hold,
+    buy_and_hold_bars,
+    close_fill_final_equity,
+    fees_in_window,
+    restrict,
+    run_backtest,
+)
 from ..strategies import SmaTrend
 from .conftest import make_bars, ramp
 
@@ -207,11 +218,26 @@ def test_gross_equity_ignores_costs_entirely():
 
 
 def test_buy_and_hold_pays_one_entry_and_one_exit():
-    bars = make_bars([100, 120, 150], opens=[100, 100, 120])
+    # open[0] is deliberately below open[1] — the benchmark must ignore it.
+    bars = make_bars([100, 120, 150], opens=[80, 100, 120])
     benchmark = buy_and_hold(bars, Costs(fee_per_side=0.001), "1h")
-    assert benchmark.gross_equity == pytest.approx(1.5)  # 100 -> 150
+    assert benchmark.gross_equity == pytest.approx(1.5)  # bought at open[1]=100, sold at 150
     assert benchmark.performance.final_equity == pytest.approx(1.5 * 0.999**2, rel=1e-12)
     assert benchmark.label == "buy & hold"
+
+
+def test_buy_and_hold_starts_where_a_strategy_could_trade():
+    """A listing bar's open is not a price anyone could buy at.
+
+    Bar 0 runs 1 -> 5 (a listing hour, PYTH-style); a strategy can only ever be
+    filled at the open of bar 1, so the benchmark must buy at 5 too. Entering it
+    at 1 would hand the passive side a 5x the strategies are not allowed to take.
+    """
+    bars = make_bars([5, 5, 5, 5], opens=[1, 5, 5, 5])
+    benchmark = buy_and_hold(bars, Costs(0), "1h")
+    assert benchmark.equity[0] == 1.0  # cash on bar 0, same starting point as a strategy
+    assert benchmark.gross_equity == pytest.approx(1.0)  # 5 -> 5, not 1 -> 5
+    assert benchmark.performance.total_return == pytest.approx(0.0)
 
 
 def test_buy_and_hold_rejects_an_empty_series():
@@ -241,3 +267,87 @@ def test_result_summary_is_json_friendly():
     assert data["buy_and_hold"]["final_equity"] > 0
     assert "equity" not in data
     assert "equity" in result.as_dict(include_curves=True)
+
+
+# --- a window: the tail of a run, rebased -------------------------------------
+
+
+def wavy_result(count: int = 400, window: int = 5):
+    bars = make_bars([100.0 + 15.0 * math.sin(i / 6.0) + 0.2 * i for i in range(count)])
+    strategy = SmaTrend(window=window)
+    return bars, run_backtest(bars, strategy.targets(bars), "1h", Costs(fee_per_side=0.001))
+
+
+def test_a_window_is_the_tail_of_the_full_run_rebased():
+    bars, full = wavy_result()
+    first = bars[-120].time
+    start = 280
+    windowed = restrict(full, bars, "1h", first=first)
+    assert windowed.equity[0] == 1.0
+    for k in range(1, len(windowed.equity) - 1):
+        assert windowed.equity[k] == pytest.approx(full.equity[start + k] / full.equity[start])
+    assert windowed.performance.final_equity == pytest.approx(
+        full.performance.final_equity / full.equity[start]
+    )
+    assert len(windowed.positions) == len(windowed.equity) == 120
+
+
+def test_a_window_keeps_the_trade_book_identity():
+    """A position open when the window began is folded in, so the books still meet."""
+    bars, full = wavy_result()
+    full_started_long = [i for i in range(1, len(full.positions)) if full.positions[i - 1] == 1.0]
+    assert full_started_long  # the fixture is in the market at some point
+    for start in full_started_long[:5]:
+        windowed = restrict(full, bars, "1h", first=bars[start].time)
+        assert windowed.bookkeeping_error < 1e-9, windowed.warnings
+
+
+def test_a_position_open_at_the_window_start_says_so():
+    bars, full = wavy_result()
+    start = next(i for i in range(1, len(full.positions)) if full.positions[i - 1] == 1.0)
+    windowed = restrict(full, bars, "1h", first=bars[start].time)
+    assert any("already open when the window began" in w for w in windowed.warnings)
+    carried = windowed.trades[0]
+    assert carried.entry_time == bars[start].time
+    assert carried.entry_price == bars[start].open
+    assert carried.equity_at_entry == 1.0
+
+
+def test_a_window_benchmark_enters_at_the_windows_second_open():
+    bars, full = wavy_result()
+    start = 300
+    windowed = restrict(full, bars, "1h", first=bars[start].time)
+    assert windowed.benchmark.equity[0] == 1.0
+    assert windowed.benchmark.equity[1] == pytest.approx(bars[start + 1].close / bars[start + 1].open)
+    assert windowed.benchmark.performance.final_equity == pytest.approx(
+        bars[-1].close / bars[start + 1].open * 0.999**2, rel=1e-9
+    )
+
+
+def test_a_window_reports_only_the_trades_it_contains():
+    bars, full = wavy_result()
+    start = 300
+    windowed = restrict(full, bars, "1h", first=bars[start].time)
+    inside = [t for t in full.trades if t.entry_index >= start]
+    assert len(windowed.trades) == len(inside) or len(windowed.trades) == len(inside) + 1
+    assert all(t.entry_time >= bars[start].time for t in windowed.trades)
+
+
+def test_a_window_at_the_very_start_changes_nothing():
+    bars, full = wavy_result()
+    assert restrict(full, bars, "1h", first=bars[0].time) is full
+
+
+def test_a_window_of_two_bars_is_rejected():
+    bars, full = wavy_result()
+    with pytest.raises(ValueError, match="not enough to measure"):
+        restrict(full, bars, "1h", first=bars[-2].time)
+
+
+def test_a_wiped_account_cannot_be_windowed():
+    """There is no equity to rebase a window on once the account is gone."""
+    bars = make_bars([100.0, 100.0, 400.0] + [400.0] * 5)
+    geared = run_backtest(bars, [-1.0] * len(bars), "1h", Costs(0))
+    assert any("wiped out" in w for w in geared.warnings)
+    with pytest.raises(ValueError, match="wiped out when the window opened"):
+        restrict(geared, bars, "1h", first=bars[4].time)
