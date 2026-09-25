@@ -138,6 +138,39 @@ it wins on 51% of assets for a median +0.006 Sharpe. TSMOM is not a better signa
 than an SMA in general; it is a slow look at a slightly earlier reference, and on a
 few assets (BTC among them) that reference is worth real money.
 
+**It is not a cost effect.** If the weekly grid only saved commission, cheaper fees
+would move the optimum towards more frequent decisions. They do not: sweeping the
+grid against the fee on 751 hourly series, the best frequency is **one week at
+0.00%, 0.05%, 0.10% and 0.20% per side alike** (median Sharpe −0.10, −0.11, −0.11,
+−0.13, against −0.26 for reading the same signal every bar). Deciding every bar is
+worse even when trading is *free*, so the grid is a **filter, not a discount**: a
+slow 30-day signal read hourly whipsaws across zero — 164 trades against 12 — and
+sampling it weekly removes that noise before it costs anything. The commission
+effect is real but second-order: it accounts for about 0.02–0.03 of the difference,
+which matches the trade arithmetic (a daily grid pays ~5%/year at 0.2%/side).
+
+That also explains why a dead zone did nothing on top of it: the weekly grid is
+already the de-noising, and a threshold repeats the work.
+
+**The optimum is a broad plateau, not a knife edge.** The same signal on grids from
+one hour to 30 days: median Sharpe −0.57 (1h), −0.37 (6h), −0.32 (1d), −0.21 (3d),
+**−0.13 (1w)**, −0.19 (2w), −0.31 (30d). Three days to two weeks sit within 0.06 of
+the peak, so "weekly" is a basin rather than a lucky value — which is what makes the
+earlier finding trustworthy rather than a fit.
+
+**The day of the week barely matters.** Shifting the weekly grid to each of the
+seven days: Thursday (the epoch day, and the default the repository inherited) is
+best at −0.13, Wednesday ties it, the weekend is worst at −0.23. Per asset Thursday
+beats the median of the other six days on 58% of series for +0.04 Sharpe — real
+enough to prefer a weekday, too small to be anything but a tie-breaker, and it fits
+the liquidity picture (turnover peaks 13:00–17:00 UTC and the weekend is quiet).
+
+**And the lookback cannot be judged independently of the grid.** The best lookback
+in this repository (720 bars) was measured at a fixed weekly grid, which is exactly
+four samples per horizon; a 336-bar lookback read weekly gets two samples per
+horizon and looks worse than it is. Any statement of the form "this lookback is
+best" is conditional on the frequency it was read at.
+
 The obvious follow-up was to let the walk-forward choose the frequency too, since
 every run above held it fixed at 168 bars. Doing that (`--grid lookback=336,720
 --grid rebalance=24,168,720`) made it **slightly worse, not better**:

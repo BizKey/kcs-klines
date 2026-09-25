@@ -175,7 +175,15 @@ Sharpe 0.38 on 1h.
   (median Sharpe −0.57, 18–19% profitable); with it both are usable. Monthly is
   worse than weekly for both, so it is an optimum, not "slower is better". On BTC
   out-of-sample the grid alone takes SMA from −2.18% to +322.72%, and the signal
-  adds the rest (+978.53%). Letting the walk-forward *choose* the frequency as well
+  adds the rest (+978.53%). **It is a filter, not a discount**: the best grid is one
+  week at a 0.00% fee just as at 0.20%, and reading the same signal every bar is
+  worse even when trading is free (−0.26 against −0.10 median Sharpe), because a slow
+  signal sampled hourly whipsaws across zero. The optimum is a broad plateau (one
+  hour −0.57, one day −0.32, three days −0.21, one week −0.13, two weeks −0.19, 30
+  days −0.31) and the day of the week is worth only +0.04 Sharpe (Thursday, the epoch
+  day the default inherited, beats the other six on 58% of series). The lookback and
+  the grid are therefore not independent: "this lookback is best" is conditional on
+  the frequency it was read at. Letting the walk-forward *choose* the frequency as well
   (24/168/720 per window) made it slightly worse — +900.74% against +978.53%, with
   the winning combination scattered across all six (19/15/12/10/10/9 wins of 75).
   The frequency has to be in the right ballpark and is not worth optimising: set
