@@ -56,13 +56,26 @@ def ramp(count: int, start: float = 100.0, step: float = 1.0) -> list[float]:
     return [start + i * step for i in range(count)]
 
 
-def write_archive(root: Path, symbol: str, timeframe: str, bars: list[Bar], name: str = "all.parquet") -> Path:
-    """Write bars as a Parquet partition the loader understands."""
+def write_archive(
+    root: Path,
+    symbol: str,
+    timeframe: str,
+    bars: list[Bar],
+    name: str = "all.parquet",
+    turnovers: list[float] | None = None,
+) -> Path:
+    """Write bars as a Parquet partition the loader understands.
+
+    `turnovers` defaults to `volume * close`, which is what the collector stores in
+    that column: quote-currency volume, used by the risk-parity universe ranking.
+    """
     import pyarrow as pa
     import pyarrow.parquet as pq
 
     target = root / symbol / timeframe
     target.mkdir(parents=True, exist_ok=True)
+    if turnovers is None:
+        turnovers = [bar.volume * bar.close for bar in bars]
     table = pa.table(
         {
             "time": pa.array([b.time for b in bars], type=pa.int64()),
@@ -71,6 +84,7 @@ def write_archive(root: Path, symbol: str, timeframe: str, bars: list[Bar], name
             "low": pa.array([b.low for b in bars], type=pa.float64()),
             "close": pa.array([b.close for b in bars], type=pa.float64()),
             "volume": pa.array([b.volume for b in bars], type=pa.float64()),
+            "turnover": pa.array(turnovers, type=pa.float64()),
             "symbol": pa.array([symbol] * len(bars), type=pa.string()),
             "timeframe": pa.array([timeframe] * len(bars), type=pa.string()),
         }

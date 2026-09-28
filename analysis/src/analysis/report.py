@@ -25,6 +25,9 @@ CURVE_COLORS = ("#1a73e8", "#9aa0a6", "#188038", "#d93025", "#f9ab00", "#9334e6"
 MARKER_ENTRY = "#137333"
 MARKER_EXIT = "#c5221f"
 MARKER_FLIP = "#8430ce"
+#: A marker that is neither a gain nor a loss of size: a rebalance that reshuffled
+#: names without changing how much capital is at work.
+MARKER_SAME = "#5f6368"
 
 #: A marker is `(index into times, colour, tooltip text)`.
 Marker = tuple[int, str, str]
@@ -40,6 +43,7 @@ __all__ = [
     "MARKER_ENTRY",
     "MARKER_EXIT",
     "MARKER_FLIP",
+    "MARKER_SAME",
 ]
 
 
@@ -242,6 +246,8 @@ def write_curves(
     colors: dict[str, str] | None = None,
     markers: list[Marker] | None = None,
     levels: dict[str, float] | None = None,
+    marker_words: dict[str, tuple[str, str]] | None = None,
+    marker_title: str = "position changes",
 ) -> None:
     """Several curves on one log-scale chart, as a dependency-free SVG.
 
@@ -250,7 +256,11 @@ def write_curves(
     lines behind the curves at the given indices, and `levels` draws a dashed
     horizontal line with its multiple at the end value of the named curve — the
     headline figure, which is what a reader wants off the chart without doing
-    arithmetic on a log axis. A curve that reaches zero — an account wiped out by
+    arithmetic on a log axis. `marker_words` maps a marker colour to the
+    `(word, colour name)` the footer should print for it — a rebalance chart marks
+    "more invested" and "less invested" rather than entries and exits, and the footer
+    has to say which — with `marker_title` naming the event itself. A colour used by
+    the caller but absent from the map is printed as itself rather than dropped. A curve that reaches zero — an account wiped out by
     a geared position — is drawn on the axis floor rather than crashing the log
     scale, and labels are XML-escaped so an `&` in a symbol or a strategy name
     cannot corrupt the file.
@@ -351,17 +361,22 @@ def write_curves(
                 f'<line x1="{x(index):.2f}" y1="{pad_t}" x2="{x(index):.2f}" y2="{HEIGHT - pad_b}" '
                 f'stroke="{colour}" stroke-width="1" stroke-opacity="{opacity:.2f}"/></g>'
             )
-        counted = [
-            (MARKER_ENTRY, "in", "green"),
-            (MARKER_EXIT, "out", "red"),
-            (MARKER_FLIP, "flip", "purple"),
-        ]
-        tally = ", ".join(
-            f"{word} = {name} ({sum(1 for _, colour, _ in marks if colour == target)})"
-            for target, word, name in counted
-            if any(colour == target for _, colour, _ in marks)
-        )
-        key_text = f"position changes: {tally}"
+        words = {
+            MARKER_ENTRY: ("in", "green"),
+            MARKER_EXIT: ("out", "red"),
+            MARKER_FLIP: ("flip", "purple"),
+        }
+        words.update(marker_words or {})
+        order = [MARKER_ENTRY, MARKER_EXIT, MARKER_FLIP]
+        order += [c for c in dict.fromkeys(colour for _, colour, _ in marks) if c not in order]
+        parts = []
+        for colour in order:
+            count = sum(1 for _, drawn, _ in marks if drawn == colour)
+            if not count:
+                continue
+            word, name = words.get(colour, (colour, colour))
+            parts.append(f"{word} = {name} ({count})")
+        key_text = f"{marker_title}: {', '.join(parts)}"
     else:
         key_text = ""
 

@@ -17,6 +17,7 @@ kcs-basket = "analysis.basket:main"
 kcs-journal = "analysis.journal:main"
 kcs-walkforward = "analysis.walkforward:main"
 kcs-portfolio = "analysis.portfolio:main"
+kcs-riskparity = "analysis.riskparity:main"
 
 [dependency-groups]
 dev = [

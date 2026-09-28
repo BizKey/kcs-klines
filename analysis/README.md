@@ -14,8 +14,9 @@ uv run kcs-backtest --journal --note "why I ran this"
 uv run kcs-backtest --strategy tsmom --fee 0.001 --symbol ETH-USDT
 uv run kcs-basket --symbols BTC-USDT,ETH-USDT,SOL-USDT,XRP-USDT,BNB-USDT
 uv run kcs-backtest --symbol BTC-USDT --last 1y   # only the last year, warm history
+uv run kcs-riskparity --top 5 --min-history 3y --vol-budget 0.4   # a de-risked book
 uv run kcs-journal verify        # re-check what was recorded
-uv run pytest                    # 326 tests
+uv run pytest                    # 364 tests
 ```
 
 `analysis` is a [uv](https://docs.astral.sh/uv/) workspace member: the root
@@ -70,6 +71,7 @@ analysis/
 | `walkforward.py` | choose parameters on a train window, judge them on the next unseen one |
 | `portfolio.py` | cross-sectional momentum across the whole universe, ranked and rebalanced |
 | `basket.py` | a named list of symbols, one strategy on every leg, combined into one curve |
+| `riskparity.py` | a rule-picked book: top names by turnover, unequal weights, a volatility budget |
 | `run_backtest.py` | the CLI that ties it together |
 | `out/` | artifacts (gitignored) |
 | `tests/` | pytest suite: engine contracts, registry-wide strategy checks, CLI end-to-end on a temp archive, and a regression test against the real archive |
@@ -94,12 +96,13 @@ uv add --package analysis --dev some-dev-tool   # a new dev dependency
 `python -m analysis.run_backtest` inside an environment that has `pyarrow`
 installed — the package itself is pip-installable from `analysis/`.
 
-## Four ways to ask a question
+## Five ways to ask a question
 
 | tool | the question it answers |
 |---|---|
 | `kcs-backtest` | what would this strategy have done on this series, at these costs? |
 | `kcs-basket` | what would it have done on **these** symbols together? |
+| `kcs-riskparity` | what would a rule-picked book have done, held in unequal weights and de-risked? |
 | `kcs-walkforward` | if I picked parameters on the past, how did that choice do afterwards? |
 | `kcs-portfolio` | which of ~1000 symbols should I hold, and what does the ranking cost? |
 
@@ -161,6 +164,76 @@ five-symbol one; a list too long for a filename falls back to `Nlegs-<digest>`.
 
 What it deliberately does **not** do: rank anything, pick the legs for you, or
 rebalance legs against each other. If you want selection, that is `kcs-portfolio`.
+
+### A book held in unequal weights, de-risked
+
+`kcs-riskparity` is the "hold a few tokens in different proportions and move money
+out of the volatile ones" idea, written down so it can be measured:
+
+```bash
+uv run kcs-riskparity --top 5 --min-history 3y --vol-budget 0.4
+uv run kcs-riskparity --top 20 --weight invvol --max-weight 0.2 --vol-budget none
+uv run kcs-riskparity --top 5 --min-history 3y --last 1y   # only the last year
+uv run kcs-riskparity --top 20 --buy-hold SOL-USDT         # against holding SOL instead
+uv run kcs-riskparity --top 5 --min-history 3y --trend 200d   # risk parity plus a signal
+```
+
+* the **universe** is the top `--top` symbols by trailing turnover, re-selected on a
+  grid using only past data, and `--min-history` keeps the fresh listings out. That
+  filter does more than anything else: three years instead of one cut the commission
+  bill from 145% of capital to 17% and volatility from 111% to 33%;
+* the **weights** are `--weight equal` (the default: plain `1/N`, with no volatility
+  in it) or `--weight invvol`. Inverse volatility is the literal reading of "hold the
+  volatile ones smaller" — a token whose volatility rises gets a smaller target, so a
+  faller is cut and a riser is trimmed. It *is* risk parity once correlations are
+  ignored, which on a 100-name book is the only honest option: a covariance matrix
+  wants more bars than names. Measured on the last book of `--top 100` (1d), `equal`
+  puts every name at **1.00%**, while `invvol` spreads **0.11% (LSK, 710% a year) to
+  5.33% (BDX, 15%)** — a 46x range about a 0.81% median. It needs two guards. A pair calmer than
+  `MIN_VOLATILITY` (10% a year) is a stablecoin rather than a position: unguarded, a
+  top-20 inverse-vol book held 91.6% of USDC-USDT. And no single name may exceed
+  `--max-weight`, whose default is twice an equal weight, never below a quarter — it
+  scales with the book so a two-name book is not left half in cash;
+* the chart and the report carry a **passive reference**: `--buy-hold SYMBOL` (default:
+  the `--calendar` symbol, `none` to switch it off) plots one price held from the first
+  bar. It is a different animal from the "equal-weight hold" benchmark, which re-selects
+  and re-equalises the *same universe* as the book on the same grid — the reference
+  answers "did any of this beat simply holding BTC?". It is the price ratio less one
+  commission side on the way in and no exit (an open position is not liquidated on the
+  last bar), marked at the same closes as the book, and a symbol listed after the
+  calendar starts sits in cash until it has a price. Inside a `--last` window it is
+  *re-bought* at the window's start rather than carried in: a passive hold has no state,
+  so "what you held" and "what you would have bought" are the same position;
+* the **trend rule** (`--trend 30d`, off by default) is the one thing here that can
+  leave the market. A name is held only while its close is above its close that long
+  ago — the signal `Tsmom` reads — and a name that loses its trend is sold on the
+  **next close**, between rebalances, so the exit is not a month late; it can only come
+  back at the next rebalance, which keeps entries on the same slow clock as the rest of
+  the book. The passive comparisons are never gated: gating them too would fold the rule
+  being measured into the thing it is measured against. Because the book can now be in
+  cash for long stretches, the report says how much capital was **at work across bars**
+  and on what share of bars it held nothing at all, and the equity CSV carries the
+  exposure on *every* row rather than only on the rebalance rows;
+* the **risk budget** scales the whole book down when its own trailing volatility is
+  above `--vol-budget`, and never up. It is a dial, not a promise: asking for 40% on
+  a wide universe delivered 111%;
+* a decision is taken on a bar's close and applied on the **next** close, and costs
+  are charged on the traded notional measured against the drifted weights — only the
+  *difference* is traded, so a position that is already at its target costs nothing
+  and one that has drifted is trimmed rather than sold and rebought (the naive
+  version costs about 3.2× more commission on the top-5 book);
+* `--last` reports only the last stretch (`1y`, `6mon`, `90d`). Durations follow
+  `data.parse_duration`, where **`m` is a minute and `mon` a month**, so half a year is
+  `6mon` — and asking for a window shorter than one bar of the chosen timeframe is an
+  error that says so rather than quietly becoming a one-bar book. Inside the window,
+  the same rule as
+  everywhere else applies: the ranking, the volatility estimates, the age filter and the risk
+  budget's trailing volatility all still see the history before the window, so the
+  window measures the same book rather than a version of it that started cold. The
+  book is taken as it stood on the window's first bar, and the report says so; the
+  window's own commissions are restated against the capital it started with, and a
+  windowed run writes its own artifacts (`_last1y` in the name) so it cannot
+  overwrite the full run's.
 
 ### Reading only the recent stretch
 
@@ -439,7 +512,15 @@ For `--symbol BTC-USDT --timeframe 1h --strategy sma --param window=200`, `out/`
   would turn the chart into a solid block; the more lines there are, the fainter
   each one is drawn. The basket chart marks its own swaps the same way, with the
   legs that moved named in the tooltip
-  (`2021-09-23 01:00 UTC — BTC-USDT, ETH-USDT, BNB-USDT out; capital in the market 80% → 20%`);
+  (`2021-09-23 01:00 UTC — BTC-USDT, ETH-USDT, BNB-USDT out; capital in the market 80% → 20%`).
+  The `kcs-riskparity` chart uses the same green/red/purple vocabulary for a
+  **different event** — its lines are *rebalances*, not entries and exits: green means
+  the book put more capital to work, red that it took risk off, grey that the size did
+  not change and only the names did, and a purple flip cannot occur because the book
+  is long-only. Each tooltip carries the transition it marks
+  (`2026-06-11 00:00 UTC — selected 100 names, 100% → 67% invested, turnover 0.62`), and
+  the caption under the chart counts each colour, so the two meanings cannot be
+  confused;
 * `sma200_BTC-USDT_1h_metrics.json` — the summary, the data audit, and the
   benchmark if `--json` is given (`--json-curves` adds the full curves).
 

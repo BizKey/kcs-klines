@@ -127,6 +127,34 @@ are in the red and the median maximum drawdown is −82.1%. Half a year after
 listing, only 25% of pairs are above their day-one price and the median is
 **−49.9%**.
 
+**Two facts about what "survival" means here, both measured on the daily archive.**
+
+First, **there are no delisted pairs in it**: of 982 daily series, **not one** stopped
+printing bars before the end (0 of 982 by 90 days, 0 by 365). The collector fetches the
+exchange's current listing, so everything the archive contains is, by construction,
+something that is still listed. Any survival rule tested here is therefore tested on a
+survivor-biased universe, and the numbers are an upper bound.
+
+Second, **still listed is not alive**. Measured from each series' own peak to today, the
+median pair is **−93.6%**, 59% are more than 90% below their peak, and the median total
+return is −86.5%.
+
+| history | series | median from its peak | median total return | more than 90% below peak |
+|---|---|---|---|---|
+| 7+ years | 78 | −96.3% | −84.4% | 71% |
+| 5–7 years | 160 | **−98.3%** | −93.9% | 80% |
+| 3–5 years | 174 | −95.3% | −91.9% | 72% |
+| 2–3 years | 122 | −97.1% | −93.9% | 78% |
+| under 2 years | 448 | −86.1% | −75.9% | 40% |
+
+So a long listing is **not** a health screen — the 5–7-year cohort is the most damaged of
+all, and the youngest cohort looks best only because it has not had time to fall from its
+listing pump. What `--min-history` actually buys is **continuity and liquidity**: a pair
+that has traded for years can still be executed in and out of, and the fresh listings are
+where the noise lives. That is why it cut the commission bill from 145% to 17% of capital
+and the volatility from 111% to 33% in §6, and why 92% of 5+ year series beat holding
+under a trend rule (§1.5) — not because they did not crash, but because they still trade.
+
 **Consequence:** any statistic over "all assets" is dominated by dying listings,
 and any rule that *selects* from the whole universe selects them on purpose.
 Cross-sectional momentum over all pairs returned **−81.2%** against −47.4% for
@@ -249,10 +277,101 @@ them without new data.
 | **Grids (1% step)** | EV −1.39% per entry: median adverse excursion −5.38% in 24h and −16% in 7 days, and 3% of entries never recover within 90 days (median −71.6%). |
 | **TP1% / SL3%** | 67.1% wins against the 75–80% needed to break even at these costs. |
 | **Funding as a strategy** | Long-run ±2%/yr (BTC +1.7%, ETH +2.0%, SOL −0.7%); the worst month was −1.06%, the longest adverse streak 7.7 days. |
+| **DCA as a timing rule** | Over the last five years weekly DCA into BTC earned a money-weighted **28.0%** a year against **14.9%** for a lump sum of the same 26,100 — but that is what the *schedule* did in a window that opened with a bear market, not an edge. Filtering the contributions by a 200-day trend cut the IRR to **12.3%** (46% of the money never got invested), and adding a trend exit finished **flat over five years** (0.99x paid in, −0.3% a year) while the trend rules on the same window made 2.5–3.2x. |
+| **Value averaging** | A linear target demanded **83,858 paid in to end at 26,100**; a +1%/week target demanded 657k to end at 347k. Its 40.7% IRR is an artefact of withdrawing into strength, and the plan needs unbounded capital exactly when the market falls. |
+| **Grid trading, at portfolio level** | Best of five configurations **1.51x against 2.00x** for holding the same window, with a −61% drawdown at half the average exposure — worse risk per unit of return than simply holding half in BTC and half in cash. Re-centring the grid monthly turned it into **0.64x** and weekly into **0.52x**, because re-centring *realises* losses; fees (5% of the budget at 2% spacing) were the smaller problem. It is structurally "buy more as it falls", so exposure peaks at the bottom. |
+| **Martingale / averaging down** | On a 10,000 budget every sizing tested **ran out of cash in the first big decline** — base 500 on 2021-12-09 at 47,549, base 1,000 on 2021-11-26 at 53,723 — and then held a bag for years: −67.5% and −70.7% drawdowns for 1.24x and 1.28x over the five years. The base-100 variant shows a −15% drawdown only because 99% of the capital never left the account. |
+| **RSI** | Buying oversold (RSI(14) < 30) 0.52x with a −67.8% drawdown, and the registry's 2-period reversion −29.2% over the same window; RSI(14) > 50 as a momentum filter 1.35x at −50.3%; only "buy strength" (RSI > 70) was respectable at **1.93x with −20.7%**, still behind a plain 200-day SMA (2.97x) on the same data. |
+
+### The indicator zoo, screened
+
+Thirty classic indicator rules were put through one harness — signal on a close, held
+over the next close-to-close move, 0.1% a side, long or cash — and then twenty of them
+were screened over the **whole daily archive** (530 series with 500+ bars), which is the
+only place a ranking means anything. Two answers came out, and the second matters more.
+
+**On BTC, which is a survivor, all of them work and the ranking is soft.** Over the 8.8
+years: Ichimoku (price above the cloud) 24.67x at Sharpe 0.97, ADX(14) > 25 with +DI > −DI
+21.66x at **1.14**, RSI(14) > 50 20.39x at 0.87, Donchian 20/10 13.79x at 0.78, plain
+SMA 200 12.15x at 0.70, Keltner 8.26x at 0.82 — against 13.00x at 0.50 for holding. One
+caveat on the best-looking row: **ADX + DMI could not be validated archive-wide** — on the
+median series the implementation latches (100% exposure, 0.20x, −95.2% drawdown, the
+profile of buy & hold), because `+DI > −DI` with a strong ADX stays true forever on a
+dying series. Treat it as a candidate to re-implement, not as the winner its BTC number
+suggests. The Spearman correlation between the Sharpe ranking on the last five years and on the whole
+history is only **+0.70**, with three of five names shared at the top, so "the best
+indicator" is half noise. What actually separates the rows is **how much of the time they
+are out**: ADX 29%, Ichimoku 45%, RSI 50%, SMA 200 54%, and each row beats a constant
+exposure at its own average by 1–20x, which is the trend edge of §1.4 in thirty costumes.
+
+**Across the archive, none of them has a positive median.** Median Sharpe is **−0.10 at
+best** (Bollinger breakout, 22% exposure) and −0.53 at worst, and the median asset loses
+money under every rule — 0.91x at best against 0.20x for holding it. Ranked by median
+Sharpe:
+
+| rule | median x | profitable | median Sharpe | beats holding | median DD | exposed |
+|---|---|---|---|---|---|---|
+| Bollinger breakout (> upper, out < middle) | 0.85x | 43% | −0.10 | 86% | −65.1% | 22% |
+| Keltner (> EMA20+2ATR, out < EMA20) | 0.91x | 44% | −0.10 | 86% | −57.3% | 13% |
+| TRIX(15) rising | 0.81x | 42% | −0.12 | 88% | −73.0% | 34% |
+| Ichimoku (above the cloud) | 0.85x | 40% | −0.14 | 87% | −69.5% | 22% |
+| Bollinger reversion | 0.71x | 33% | −0.20 | 79% | −67.8% | 32% |
+| EMA 200 | 0.75x | 26% | −0.23 | 82% | −70.2% | 19% |
+| ROC(20) > 0 | 0.66x | 34% | −0.23 | 81% | −79.4% | 39% |
+| RSI(14) > 50 | 0.65x | 37% | −0.24 | 83% | −77.6% | 35% |
+| Donchian 20/10 | 0.73x | 36% | −0.24 | 85% | −72.1% | 26% |
+| Stochastic %K > 50 | 0.61x | 32% | −0.33 | 79% | −78.2% | 34% |
+| SMA 200 | 0.63x | 24% | −0.33 | 78% | −75.0% | 25% |
+| MFI(14) > 50 | 0.49x | 28% | −0.37 | 73% | −84.7% | 52% |
+| MACD line > signal | 0.38x | 22% | −0.42 | 72% | −87.7% | 54% |
+| OBV > its 20-bar average | 0.42x | 24% | −0.44 | 71% | −86.0% | 47% |
+| Heikin-Ashi close > open | 0.41x | 25% | −0.45 | 70% | −86.2% | 44% |
+
+**The family really is one trade.** Across twelve trend rules on BTC daily the positions
+agree on a mean of **71%** of days (range: 45% for SMA 200 against MACD, 95% for SMA 200
+against EMA 200; 36 of the 66 pairs agree more than 70% of the time), and a **majority vote
+of all twelve** returned 15.84x at Sharpe 0.80 and a −45.2% drawdown at 52% exposure —
+better than the *median* single rule (12.41x, 0.75) and worse than the *best* one (Ichimoku
+24.67x), and comfortably better than holding (13.00x, 0.50). So voting gives you the average
+outcome without the hindsight of having picked the winner, which is the same trade the
+horizon blend makes in §1.6: robustness instead of a peak.
+
+Read the table against §1.2: the universe, not the indicator, is what decides the median
+outcome. Every rule here beats holding the same dying asset (70–88% of series) and every
+rule still loses money on the median asset, exactly as TSMOM did in §1.4. So the answer
+to "which indicator" is: **the simplest one you will actually follow**, because the family
+is one trade in thirty costumes and the choice inside it is worth less than the choice of
+universe, grid and exit. Two families are worth naming separately: **mean reversion is
+dead in every form measured** (Bollinger reversion 0.71x median and 0.66x on BTC; RSI(2)
+0.65x on BTC with 314 trades), and **the exotic trend proxies are not better than a
+moving average** — Supertrend 7.49x, Parabolic SAR 4.31x, Heikin-Ashi 5.75x and linear
+regression 7.66x on BTC, all below plain SMA 200 (12.15x) and usually with worse exits.
+Volume-based indicators (OBV, A&nbsp;/D, VWAP) are trend proxies with a noisier input and
+land at the bottom of both tables; MFI is the one exception and it is RSI with volume in
+it.
+
+Three of those families share one defect and it is worth naming: **DCA, value averaging
+and a grid are schedules, not signals.** They decide *when money goes in*, never *when it
+comes out*, so their result is whatever the asset did between the first contribution and
+the last, reshaped by the schedule. The measurements above only show which shape is worse:
+a grid and a martingale buy most aggressively at the bottom of a decline (exposure peaks
+where the trend rules are in cash), and value averaging does the same but with a capital
+demand that grows as the price falls. The one family here with a real, measured edge is an
+**exit** — the trend rule in §1.4 — and the second is **how big the position is** (§1.5,
+and the volatility target in §6).
 
 ---
 
 ## 3. Corrections — mistakes this project made and fixed
+
+* **A hand-rolled backtest needs calibrating against `engine.py` before it means
+  anything.** The indicator screen was first written with the position applied one bar
+  late (two bars from the decision), which made every rule look about 30% worse and
+  reordered the table: SMA 200 came out at 2.44x where the engine reports 3.1918x for the
+  same rule and window. Feeding the engine's own position column back through the harness
+  is what settled it — after the fix the harness reproduced 3.19x. Any new exploratory
+  backtest should be checked against the engine on one rule before its numbers are quoted.
+
 
 Kept here so nobody re-introduces them. **None of these was caught by the test
 suite**; every one was caught by comparing two independent paths to the same
@@ -318,8 +437,10 @@ accounts**, maximum `bookkeeping_error` 8.9e-15, no exceptions.
 ## 5. What to expect from it
 
 The best survivable configuration measured here returns roughly **24% a year
-with a −47% drawdown** (five majors) or ~52% a year with −67% (BTC+ETH over 8.9
-years). Single-asset TSMOM has produced Sharpe 0.7 with drawdowns of −65% and
+with a −47% drawdown** (five majors over the 5.14-year window all legs share) or
+~52% a year with −67% (BTC+ETH over 8.9 years). §6 puts the candidates on one
+common five-year window; there the same basket returns 24.8% a year with a −51.4%
+drawdown, and single-asset TSMOM on BTC returns 20.5% a year with −37.5%. Single-asset TSMOM has produced Sharpe 0.7 with drawdowns of −65% and
 worse, on 4–5 assets that happened to survive.
 
 There is nothing in this data supporting a smooth monthly target. The four
@@ -331,7 +452,140 @@ year in cash, which is why it returned +1.52% while BTC fell 24.95%.
 
 ---
 
-## 6. Next steps, in priority order
+## 6. What to use, and in what order
+
+Everything above is measurement; this is the decision it supports. One table, one
+window, so the rows are comparable to each other instead of being dragged out of
+different eras: the last five years of the daily archive, 2021-09-28 … 2026-09-27,
+0.1% per side, spot, no leverage.
+
+| what you would have run | five years | CAGR | vol | Sharpe | max DD |
+|---|---|---|---|---|---|
+| **TSMOM on five majors** — 30-day lookback, weekly decision, 1h, equal weight | **+202.9%** (3.03x) | 24.8% | 42.8% | 0.52 | −51.4% |
+| TSMOM on BTC alone — 30-day, weekly, 1d | **+154.1%** (2.54x) | 20.5% | 34.5% | **0.55** | **−37.5%** |
+| buy & hold BTC | +105.7% (2.06x) | 15.5% | 51.5% | 0.28 | −76.6% |
+| rule-picked book, inverse-vol weights, 40% budget (`kcs-riskparity`) | +101.8% (2.02x) | 15.1% | 51.1% | 0.27 | −62.8% |
+| the same book with a 200-day trend gate | +91.8% (1.92x) | 13.9% | 40.6% | 0.32 | −47.7% |
+| the same book with a 30-day trend gate | −6.6% (0.93x) | −1.4% | 28.1% | −0.05 | −50.7% |
+| holding those five majors passively | +51.1% (1.51x) | 8.6% | 59.6% | 0.14 | −78.5% |
+| holding the rule-picked selection passively | +49.3% (1.49x) | 8.3% | 62.3% | 0.13 | −71.1% |
+| **`tsmom-blend` on five majors** — horizons of 1/2/4/8 weeks, weekly, no lookback to choose | **+199.2%** (2.99x) | 24.5% | 35.7% | **0.61** | **−31.7%** |
+| `voltarget-tsmom` on five majors (40% vol target) | +82.4% (1.82x) | 12.8% | 23.2% | 0.52 | −32.6% |
+| `tsmom-blend` on **ten** majors (adds ADA, DOGE, AVAX, LINK, DOT) | +124.6% (2.25x) | 17.6% | 36.0% | 0.45 | −37.8% |
+| holding those ten majors passively | −10.6% (0.89x) | −2.2% | 65.1% | −0.03 | −81.2% |
+
+The basket row runs on hourly bars over its own five-year span (2021-09-29 …
+2026-09-28, the window all five legs share); every other row is daily. A day of
+overlap does not matter here: each row pays 0.1% a side, none uses leverage, and
+each carries its own passive comparison from the same run.
+
+Read it by rows, not by headlines:
+
+* **Trend following on liquid names is first, and it wins on both sides of the
+  comparison**: the basket made +202.9% against +51.1% for holding the same five,
+  and single-asset TSMOM made +154.1% against +105.7% for holding BTC. Same rule,
+  same window, same costs — the only thing that beat a passive hold on return *and*
+  risk at once.
+* **Diversifying the rule beat improving it.** The basket and the single asset are
+  the same signal; spreading it over five liquid names added 49 points of return.
+  The single-asset version has the better drawdown (−37.5% against −51.4%), which is
+  the honest reason to prefer it if you size by pain rather than by return.
+* **Risk parity did not beat holding BTC over these five years** (+101.8% against
+  +105.7%, same Sharpe), although it beats BTC over the 8.9-year history at a much
+  better drawdown (−62.8% against −82.9%). Its value is the rule-picked universe and
+  the risk shape, not extra return.
+* **A trend gate on the book improves the shape, not the return**: 200 days turned
+  +101.8% into +91.8% while cutting the drawdown from −62.8% to −47.7% and lifting
+  Sharpe from 0.27 to 0.32, at 54% of capital at work. The 30-day gate destroyed the
+  result (−6.6%): on a book that is re-selected monthly, a fast gate whipsaws. Gate
+  slowly or not at all.
+* **Everything passive lost to everything active**, with one exception worth staring
+  at: plain BTC beat both risk-parity rows. Any rule that cannot beat the
+  `--buy-hold` line over a full cycle is decoration.
+* **Blending horizons is the best signal for a basket.** `tsmom-blend` on the same
+  five majors returned the same money as a tuned 30-day lookback (+199.2% against
+  +202.9%) with the drawdown cut from −51.4% to −31.7% and Sharpe lifted from 0.52 to
+  0.61 — and it has **no lookback to choose**, which is the point: it cannot be fitted
+  to the window it is judged on. On BTC alone the same blend was much worse (+62.4%
+  against +154.1%), so this is a diversification effect, not a better rule.
+* **More names is not more diversification.** Adding five more majors (ADA, DOGE,
+  AVAX, LINK, DOT) took the basket from +199.2% to +124.6% while their passive hold
+  returned −10.6%: the extra names were weaker alts, and the rule still beat holding
+  them by 135 points. Five liquid majors beat ten.
+
+### Where each knob belongs
+
+The same measurements say which of these is a *sizing* tool and which is a
+*selection* tool, and getting that the wrong way round costs money:
+
+| knob | on one concentrated asset | on a diversified basket |
+|---|---|---|
+| volatility target (40%) | **helps**: TSMOM on BTC 0.55 → 0.58 Sharpe, and SMA 200 0.66 → **0.71** with the drawdown −36.2% → **−26.3%** | **only de-risks**: `voltarget-tsmom` on five majors keeps Sharpe at 0.52 but halves the return (+82.4% against +202.9%) |
+| blending horizons | hurts on BTC (+62.4% against +154.1%) | **helps**: −20 points of drawdown, same return, nothing to tune |
+| a trend gate on a rebalanced book | — | improves shape, not return (200d: +101.8% → +91.8%, drawdown −62.8% → −47.7%) |
+
+So: **volatility sizing on concentrated positions, blending on diversified ones**, and
+neither as a substitute for the other.
+
+### Also measured, and dominated
+
+Run over the same five years on BTC daily, so they can be compared to the rows above:
+`SMA 200` every bar +219.2% at Sharpe 0.66 and −36.2%; `SMA 200` decided weekly
++197.4%, 0.62, −34.2%; `voltarget-sma` (200-day SMA plus a 40% volatility target)
+**+185.4%, Sharpe 0.71, drawdown −26.3%, 19 trades in five years** — the best
+risk-adjusted row in this file; `MACD` +84.9%, 0.37; `breakout` (Donchian 20/10)
++41.2%, 0.22; `rsi-rev` −29.2%, −0.25 (rejected again, on a fifth window).
+
+The volatility-targeted SMA is the one to promote: its parameter is a **plateau**, not
+a knife edge — with the same 40% target, SMA windows of 50 / 100 / 150 / 200 days give
+Sharpe **0.78 / 0.70 / 0.77 / 0.71** and final equities 3.01x / 2.67x / 3.01x / 2.85x,
+and it only degrades past 250 (0.47). Anything in that range is the same rule.
+
+**One correction to §6's advice.** "Never read the signal every bar" was measured
+archive-wide on *hourly* bars (§1.1), where a slow signal sampled hourly whipsaws
+across zero. On **daily** bars it is not true: SMA 200 read every bar (+219.2%, 0.66)
+slightly beat the same rule decided weekly (+197.4%, 0.62) on BTC. The grid matters when
+you sample a slow signal fast; at daily frequency there is nothing to fix.
+
+### The stack I would actually run
+
+1. **Universe** — five to ten of the most liquid majors, chosen by a rule (trailing
+   turnover, at least three years of history, re-selected monthly or quarterly),
+   never by hand. The hand-picked five are the largest remaining weakness in the
+   best result in this file.
+2. **Signal** — on a basket, the horizon *blend* (1/2/4/8 weeks, majority vote):
+   the same return as a tuned lookback with 20 points less drawdown and nothing to
+   fit. On a single asset, a 30-day TSMOM or a 150–200-day SMA — the two are a coin
+   flip apart (§1.1), so take the one you will actually follow.
+3. **Decision frequency** — weekly when you sample a slow signal on hourly bars
+   (§1.1: +0.38 Sharpe, and it survives a zero fee). At daily frequency there is
+   nothing to fix: SMA 200 every bar and weekly were 0.66 against 0.62 on BTC.
+   Monthly is worse than weekly at both frequencies.
+4. **Sizing** — equal weight across the names that pass; a volatility target (~40% a
+   year) **on concentrated positions**, where it is the best risk-shape tool measured
+   (SMA 200 + vol target on BTC: Sharpe 0.71, drawdown −26.3%, 19 trades in five
+   years), not on an already-diversified basket, where it only de-risks; cash for the
+   rest, no leverage.
+5. **Costs** — budget at least 0.1% per side on majors and much worse elsewhere;
+   every number here already pays it.
+6. **Never** — leverage (83% of 3x runs were liquidated), shorting, pairs whose
+   round trip is above ~1%, reading a slow signal every bar, or choosing a lookback
+   on the same data you then judge it on.
+
+### In one line
+
+Best measured five-year outcome: **+203% (24.8% a year) with a −51% drawdown** (a tuned
+lookback on five majors) or the same money at **+199% with a −31.7% drawdown** from the
+blend, which needs no tuning. Best risk shape: **+185% (23.3% a year) with a −26.3%
+drawdown and 19 trades in five years** (`voltarget-sma` on BTC daily). Nothing in this
+repository supports ~5% a month; the four things that destroy an account here are
+measured in §1.1, §1.3 and §5 — turnover, leverage, shorting and illiquid pairs.
+Size so that a −50% year is survivable, keep the `--buy-hold` line on the chart, and
+treat any single multiple as noise until a walk-forward agrees with it.
+
+---
+
+## 7. Next steps, in priority order
 
 1. **Remove the hindsight from the asset list.** The best result here uses five
    hand-picked survivors. Replace it with a rule — e.g. every perp-listed pair
@@ -345,16 +599,27 @@ year in cash, which is why it returned +1.52% while BTC fell 24.95%.
    one rule on one asset currently has an honest out-of-sample number.
 4. **Intrabar stops — last.** Time-based exits already work and stops are paid for
    in commission; there is no measured evidence they would help.
-5. **Do not touch shorting, leverage or small pairs.** The data is unambiguous on
+5. **Walk-forward the trend lookback.** The two halves are now connected —
+   `kcs-riskparity --trend 30d` sizes a book *and* leaves the market — and the gate does
+   what it promises: on the 12 months that exposed the problem it turned −36.24% into
+   −3.53% with the drawdown cut from −58.6% to −17.6%. But it did that by being at work
+   only 25% of the time, and over eight years a fast gate costs more return than it
+   saves (top 5: +1071% ungated, +177% at 30d, +868% at 200d). The lookback is now the
+   module's most powerful and least justified knob: +0.41% / −3.53% / −28.70% on the same
+   12 months at 7d / 30d / 90d, with a different best value at each horizon. It needs the
+   treatment `kcs-walkforward` gives a strategy — re-choose it per window on past data
+   only — before any of these numbers means anything.
+6. **Per-symbol spread and slippage** instead of a flat 0.1% taker. This is the
+7. **Do not touch shorting, leverage or small pairs.** The data is unambiguous on
    all three, and all three are in the same direction as the losses this project
    was built to understand.
 
 ---
 
-## 7. Reproducing the headline numbers
+## 8. Reproducing the headline numbers
 
 ```bash
-uv run pytest                          # 280 tests, ~8 s
+uv run pytest                          # 376 tests, ~26 s
 
 # one asset
 uv run kcs-backtest --symbol BTC-USDT --strategy tsmom \
@@ -363,12 +628,16 @@ uv run kcs-backtest --symbol BTC-USDT --strategy tsmom \
 # a basket of named assets: combined curve, CSV, SVG chart and JSON
 uv run kcs-basket --symbols BTC-USDT,ETH-USDT,SOL-USDT,XRP-USDT,BNB-USDT --json
 
+# the rule-picked book, bought and held unevenly, with a passive reference line
+uv run kcs-riskparity --top 5 --min-history 3y --weight invvol --vol-budget 0.4 --last 5y
+uv run kcs-riskparity --top 5 --min-history 3y --weight invvol --trend 200d --last 5y
+
 # what parameters would have been chosen on the past, and how they did after
 uv run kcs-walkforward --strategy tsmom --grid lookback=336,720 \
     --train 4000 --test 1000
 ```
 
-The archive-wide screen (Section 1.3) is one backtest per series with the rule
+The archive-wide screen (Section 1.4) is one backtest per series with the rule
 expressed in calendar time. There is no CLI for it yet; this is the whole thing:
 
 ```python
