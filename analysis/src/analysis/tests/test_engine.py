@@ -14,6 +14,7 @@ import pytest
 
 from ..engine import (
     Costs,
+    DrawdownScale,
     bookkeeping_warning,
     buy_and_hold,
     buy_and_hold_bars,
@@ -351,3 +352,97 @@ def test_a_wiped_account_cannot_be_windowed():
     assert any("wiped out" in w for w in geared.warnings)
     with pytest.raises(ValueError, match="wiped out when the window opened"):
         restrict(geared, bars, "1h", first=bars[4].time)
+
+
+# --- the drawdown overlay -----------------------------------------------------
+
+
+def test_the_overlay_is_off_unless_asked_for():
+    """No parameter, no change: the default run must stay bit-identical."""
+    bars = make_bars(ramp(120, start=100.0, step=1.0))
+    targets = [1.0] * len(bars)
+    plain = run_backtest(bars, targets, "1d", Costs())
+    overlay = run_backtest(bars, targets, "1d", Costs(), drawdown_scale=DrawdownScale())
+    assert overlay.equity == plain.equity
+    assert overlay.positions == plain.positions
+    assert overlay.targets == plain.targets
+    assert plain.exposure_scale == [1.0] * len(bars)  # nothing to show when off
+
+
+def test_the_factor_only_bites_once_the_account_is_below_its_high():
+    scale = DrawdownScale(start=0.10, full=0.40, floor=0.25)
+    assert scale.factor(100.0, 100.0) == 1.0            # at the high: full size
+    assert scale.factor(95.0, 100.0) == 1.0             # −5%: still above the start
+    assert scale.factor(90.0, 100.0) == 1.0             # exactly at the start
+    assert scale.factor(75.0, 100.0) == pytest.approx(1.0 - 0.75 * (0.25 - 0.10) / 0.30)
+    assert scale.factor(60.0, 100.0) == 0.25            # at the full level: the floor
+    assert scale.factor(20.0, 100.0) == 0.25            # deeper: still the floor
+    assert scale.factor(100.0, 0.0) == 1.0              # a dead peak cannot divide
+
+
+def test_a_drawdown_cuts_the_exposure_and_a_recovery_restores_it():
+    """Up 50%, down 60%, back up: the overlay must follow the account both ways."""
+    closes = [100.0 * (1.01**i) for i in range(40)]
+    closes += [closes[-1] * (0.97**i) for i in range(1, 30)]
+    closes += [closes[-1] * (1.03**i) for i in range(1, 40)]
+    bars = make_bars(closes)
+    targets = [1.0] * len(bars)
+    result = run_backtest(bars, targets, "1d", Costs(), drawdown_scale=DrawdownScale(0.10, 0.40, 0.25))
+    trough = min(result.positions)
+    assert trough < 0.5                                  # deep in the fall it is small
+    assert result.positions[-1] > trough                 # and it comes back on the way up
+    assert result.exposure_scale[0] == 1.0
+    assert min(result.exposure_scale) >= 0.25
+    # the account's drawdown is smaller than the same rule without the overlay
+    plain = run_backtest(bars, targets, "1d", Costs())
+    assert result.performance.max_dd > plain.performance.max_dd
+
+
+def test_a_floor_of_zero_parks_the_account_for_good():
+    """Documented trap: flat means the drawdown never shrinks, so it never returns."""
+    closes = [100.0 * (1.01**i) for i in range(30)] + [100.0 * (0.97**i) for i in range(1, 40)]
+    bars = make_bars(closes)
+    result = run_backtest(
+        bars, [1.0] * len(bars), "1d", Costs(), drawdown_scale=DrawdownScale(0.05, 0.20, 0.0)
+    )
+    assert result.positions[-1] == 0.0
+    assert result.exposure_scale[-1] == 0.0
+
+
+def test_the_overlay_never_looks_ahead():
+    """A rewrite of a later bar must not move an earlier multiplier."""
+    closes = [100.0 * (1.005**i) for i in range(120)]
+    bars = make_bars(closes)
+    targets = [1.0] * len(bars)
+    scale = DrawdownScale(0.05, 0.30, 0.25)
+    original = run_backtest(bars, targets, "1d", Costs(), drawdown_scale=scale)
+    cut = 80
+    tampered = make_bars([c * (10.0 if i == cut else 1.0) for i, c in enumerate(closes)])
+    rewritten = run_backtest(tampered, targets, "1d", Costs(), drawdown_scale=scale)
+    assert original.exposure_scale[:cut] == rewritten.exposure_scale[:cut]
+    assert original.positions[:cut] == rewritten.positions[:cut]
+
+
+def test_the_book_still_balances_with_the_overlay_on():
+    """Fractional, moving exposure must not break `prod(1 + net) == final equity`."""
+    up = [100.0 * (1.02**i) for i in range(60)]
+    down = [up[-1] * (0.98**i) for i in range(1, 60)]
+    back = [down[-1] * (1.03**i) for i in range(1, 40)]
+    bars = make_bars(up + down + back)
+    result = run_backtest(
+        bars, [1.0] * len(bars), "1d", Costs(), drawdown_scale=DrawdownScale(0.10, 0.40, 0.25)
+    )
+    compounded = 1.0
+    for trade in result.trades:
+        compounded *= 1.0 + trade.net_return
+    assert compounded == pytest.approx(result.performance.final_equity, rel=1e-12)
+    assert bookkeeping_warning(result) is None
+
+
+def test_bad_overlay_settings_are_rejected():
+    with pytest.raises(ValueError, match="start < full"):
+        DrawdownScale(start=0.5, full=0.2)
+    with pytest.raises(ValueError, match="floor"):
+        DrawdownScale(floor=1.5)
+    with pytest.raises(ValueError, match="start < full"):
+        DrawdownScale(start=1.0, full=1.0)

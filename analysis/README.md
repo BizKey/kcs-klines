@@ -14,6 +14,8 @@ uv run kcs-backtest --journal --note "why I ran this"
 uv run kcs-backtest --strategy tsmom --fee 0.001 --symbol ETH-USDT
 uv run kcs-basket --symbols BTC-USDT,ETH-USDT,SOL-USDT,XRP-USDT,BNB-USDT
 uv run kcs-backtest --symbol BTC-USDT --last 1y   # only the last year, warm history
+uv run kcs-backtest --strategy tsmom --param lookback=30 --param rebalance=7 \
+    --dd-scale 10,40,25                           # cut size while the account is in drawdown
 uv run kcs-riskparity --top 5 --min-history 3y --vol-budget 0.4   # a de-risked book
 uv run kcs-journal verify        # re-check what was recorded
 uv run pytest                    # 364 tests
@@ -521,6 +523,20 @@ For `--symbol BTC-USDT --timeframe 1h --strategy sma --param window=200`, `out/`
   (`2026-06-11 00:00 UTC — selected 100 names, 100% → 67% invested, turnover 0.62`), and
   the caption under the chart counts each colour, so the two meanings cannot be
   confused;
+* `--dd-scale START,FULL,FLOOR` (in percent, `off` by default) is a **drawdown
+  overlay**, applied in the engine to every strategy: at each bar the target exposure is
+  multiplied by a factor that is 1.0 while the account is within `START` of its own
+  high-water mark, falls linearly to `FLOOR` at `FULL`, and comes back on its own as the
+  account recovers. It reads the account — the equity the same bar produced — so it
+  cannot look ahead, and `--dd-scale 10,40,25` means "full size until −10%, a quarter of
+  the target at −40%". The multiplier is kept per bar in the result and the artifacts
+  carry it in the name (`tsmom30-7_dd10-25_BTC-USDT_1d_equity.csv`). **A floor of zero is
+  a trap**: a flat account's drawdown never shrinks, so the factor stays at zero forever —
+  measured at 15,30,0 it turned TSMOM's 24.94x into 1.36x. What the overlay does *not* do
+  is improve risk-adjusted return: across TSMOM, SMA 200 and `voltarget-sma` on BTC daily
+  it cut return and drawdown by roughly the same proportion and left Sharpe where it was
+  (0.80 → 0.78, 0.67 → 0.68, 0.79 → 0.77). It is a dial for surviving your own drawdown,
+  not an edge;
 * `sma200_BTC-USDT_1h_metrics.json` — the summary, the data audit, and the
   benchmark if `--json` is given (`--json-curves` adds the full curves).
 

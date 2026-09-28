@@ -523,6 +523,7 @@ The same measurements say which of these is a *sizing* tool and which is a
 | volatility target (40%) | **helps**: TSMOM on BTC 0.55 → 0.58 Sharpe, and SMA 200 0.66 → **0.71** with the drawdown −36.2% → **−26.3%** | **only de-risks**: `voltarget-tsmom` on five majors keeps Sharpe at 0.52 but halves the return (+82.4% against +202.9%) |
 | blending horizons | hurts on BTC (+62.4% against +154.1%) | **helps**: −20 points of drawdown, same return, nothing to tune |
 | a trend gate on a rebalanced book | — | improves shape, not return (200d: +101.8% → +91.8%, drawdown −62.8% → −47.7%) |
+| a drawdown overlay (`--dd-scale 10,40,25`) | **neither**: return and drawdown fall together, Sharpe unchanged (TSMOM 24.94x/0.80/−65.6% → 12.25x/0.78/−44.1%; SMA 200 12.15x/0.67/−64.1% → 6.51x/0.68/−43.3%; `voltarget-sma` 8.12x/0.79/−45.4% → 5.26x/0.77/−35.8%) | same, and on the last five years it costs more Sharpe than it saves (0.55 → 0.48) |
 
 So: **volatility sizing on concentrated positions, blending on diversified ones**, and
 neither as a substitute for the other.

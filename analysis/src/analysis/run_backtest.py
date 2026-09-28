@@ -130,6 +130,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         metavar="NAME=VALUE",
         help="strategy parameter, repeatable (e.g. --param window=100); see --list",
     )
+    parser.add_argument(
+        "--dd-scale",
+        default="off",
+        help="cut exposure while the account is in drawdown, as `START,FULL,FLOOR` in percent "
+        "(e.g. 10,40,25: full size until -10%%, a quarter of it at -40%%), or `off` "
+        "(default: %(default)s)",
+    )
     parser.add_argument("--fee", type=float, default=0.001, help="commission per side (default: %(default)s)")
     parser.add_argument("--slippage", type=float, default=0.0, help="extra cost per side (default: %(default)s)")
     parser.add_argument(
@@ -224,7 +231,32 @@ def parse_sweep(raw: str, strategy: str) -> tuple[str, list[object]]:
     return name, parsed
 
 
-def run(bars, strategy: Strategy, timeframe: str, costs: Costs, window: Window | None = None):
+def drawdown_scale_of(spec: str) -> engine.DrawdownScale | None:
+    """`10,40,25` -> a scale that starts cutting at -10% and floors at a quarter."""
+    if spec.strip().lower() in ("off", "none", ""):
+        return None
+    parts = [piece.strip().rstrip("%") for piece in spec.replace(";", ",").split(",")]
+    if len(parts) != 3:
+        raise SystemExit(f"--dd-scale needs START,FULL,FLOOR in percent, got {spec!r}")
+    try:
+        start, full, floor = (float(piece) / 100.0 for piece in parts)
+    except ValueError:
+        raise SystemExit(f"--dd-scale values must be numbers, got {spec!r}") from None
+    try:
+        return engine.DrawdownScale(start=start, full=full, floor=floor)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from None
+
+
+def run(
+    bars,
+    strategy: Strategy,
+    timeframe: str,
+    costs: Costs,
+    window: Window | None = None,
+    drawdown_scale: engine.DrawdownScale | None = None,
+):
+
     """One strategy over one series, optionally reported for the last stretch only.
 
     The run itself always sees the whole history — that is what makes the signals
@@ -234,7 +266,12 @@ def run(bars, strategy: Strategy, timeframe: str, costs: Costs, window: Window |
     with. Truncating the input instead would leave the indicators cold.
     """
     result = engine.run_backtest(
-        bars, strategy.targets(bars), timeframe, costs, label=strategy.slug
+        bars,
+        strategy.targets(bars),
+        timeframe,
+        costs,
+        label=strategy.slug,
+        drawdown_scale=drawdown_scale,
     )
     if window is None or window.full:
         return result
@@ -279,7 +316,15 @@ def main(argv: list[str] | None = None) -> int:
     strategy = strategy_for(args.strategy, params)
     window = Window.of(bars, args.timeframe, args.last) if args.last else None
 
-    result = run(bars, strategy, args.timeframe, costs, window)
+    dd_scale = drawdown_scale_of(args.dd_scale)
+    result = run(bars, strategy, args.timeframe, costs, window, dd_scale)
+    if dd_scale is not None:
+        result.warnings.insert(
+            0,
+            f"drawdown overlay: exposure cut from -{dd_scale.start:.0%} of the account's own high, "
+            f"down to {dd_scale.floor:.0%} of the target at -{dd_scale.full:.0%} "
+            f"(average multiplier {sum(result.exposure_scale)/len(result.exposure_scale):.2f})",
+        )
     print(f"loaded {quality.bars:,} bars from {len(data.series_files(args.data_dir, args.symbol, args.timeframe))} files")
     if window is not None:
         print(window.line(bars))
@@ -304,7 +349,13 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         return 0
 
-    stem = f"{strategy.slug}_{args.symbol}_{args.timeframe}{window.stem_suffix() if window else ''}"
+    overlay = (
+        f"_dd{dd_scale.start*100:.0f}-{dd_scale.floor*100:.0f}" if dd_scale is not None else ""
+    )
+    stem = (
+        f"{strategy.slug}{overlay}_{args.symbol}_{args.timeframe}"
+        f"{window.stem_suffix() if window else ''}"
+    )
     trades_path = args.out_dir / f"{stem}_trades.csv"
     equity_path = args.out_dir / f"{stem}_equity.csv"
     chart_path = args.out_dir / f"{stem}_equity.svg"

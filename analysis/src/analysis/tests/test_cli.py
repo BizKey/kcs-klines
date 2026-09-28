@@ -471,3 +471,42 @@ def test_a_windowed_run_writes_its_own_artifacts(toy_archive: Path, tmp_path: Pa
     assert float(rows[0]["equity"]) == 1.0
     trades = list(csv_module.DictReader((out / "sma10_TOY-USDT_1h_last5d_trades.csv").open()))
     assert all(row["entry_time_utc"] >= rows[0]["time_utc"] for row in trades)
+
+
+# --- the drawdown overlay -----------------------------------------------------
+
+
+def test_dd_scale_is_parsed_or_rejected():
+    assert run_backtest_module().drawdown_scale_of("off") is None
+    assert run_backtest_module().drawdown_scale_of("none") is None
+    scale = run_backtest_module().drawdown_scale_of("10,40,25")
+    assert (scale.start, scale.full, scale.floor) == (0.10, 0.40, 0.25)
+    assert run_backtest_module().drawdown_scale_of("10%,40%,25%").floor == 0.25
+    with pytest.raises(SystemExit, match="START,FULL,FLOOR"):
+        run_backtest_module().drawdown_scale_of("10,40")
+    with pytest.raises(SystemExit, match="must be numbers"):
+        run_backtest_module().drawdown_scale_of("ten,forty,twenty")
+    with pytest.raises(SystemExit, match="start < full"):
+        run_backtest_module().drawdown_scale_of("50,20,25")
+
+
+def run_backtest_module():
+    from .. import run_backtest as module
+
+    return module
+
+
+def test_the_overlay_is_named_in_the_report_and_the_artifacts(toy_archive: Path, tmp_path: Path, capsys):
+    """A run with the overlay must be tellable apart from the same run without it."""
+    scaled = tmp_path / "scaled"
+    plain = tmp_path / "plain"
+    common = ["--data-dir", str(toy_archive), "--symbol", "TOY-USDT", "--timeframe", "1h",
+              "--strategy", "sma", "--param", "window=10"]
+    assert main([*common, "--out-dir", str(scaled), "--dd-scale", "10,40,25"]) == 0
+    printed = capsys.readouterr().out
+    assert "drawdown overlay" in printed
+    assert "sma10_dd10-25_TOY-USDT_1h_equity.csv" in [p.name for p in scaled.iterdir()]
+
+    assert main([*common, "--out-dir", str(plain), "--dd-scale", "off"]) == 0
+    assert "drawdown overlay" not in capsys.readouterr().out
+    assert not any("_dd" in path.name for path in plain.iterdir())

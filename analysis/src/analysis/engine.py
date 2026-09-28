@@ -105,6 +105,49 @@ class Benchmark:
         return "buy & hold"
 
 
+@dataclass(frozen=True)
+class DrawdownScale:
+    """Cut exposure while the account is below its own high-water mark.
+
+    `start` is the drawdown at which the cut begins, `full` the drawdown at which the
+    floor is reached, and `floor` the smallest multiplier the overlay will apply.
+    Between them the factor falls linearly, so exposure comes back on its own as the
+    account recovers: the overlay reads the *account*, not a forecast.
+
+    **A floor of zero is a trap, not a setting.** A flat account stops participating,
+    so its drawdown stops shrinking and the factor stays at zero for good — the overlay
+    has to keep some exposure if it is ever to recover. The default floor of a quarter
+    is the smallest that still heals.
+
+    It is applied to the exposure decided on the close of bar `t` using the equity the
+    same bar produced, so nothing here can see the future.
+    """
+
+    start: float = 0.10
+    full: float = 0.40
+    floor: float = 0.25
+
+    def __post_init__(self) -> None:
+        if not 0.0 <= self.start < self.full <= 1.0:
+            raise ValueError(
+                f"drawdown scale needs 0 <= start < full <= 1, got start={self.start}, full={self.full}"
+            )
+        if not 0.0 <= self.floor <= 1.0:
+            raise ValueError(f"the floor must be in [0, 1], got {self.floor}")
+
+    def factor(self, equity: float, peak: float) -> float:
+        """The multiplier for this bar's exposure: 1 at the peak, `floor` deep down."""
+        if peak <= 0 or equity >= peak:
+            return 1.0
+        drawdown = 1.0 - equity / peak
+        if drawdown <= self.start:
+            return 1.0
+        if drawdown >= self.full:
+            return self.floor
+        span = self.full - self.start
+        return 1.0 - (1.0 - self.floor) * (drawdown - self.start) / span
+
+
 @dataclass
 class BacktestResult:
     """Everything a run produced: curve, book, and summary statistics."""
@@ -121,6 +164,8 @@ class BacktestResult:
     benchmark: Benchmark
     close_fill_equity: float
     warnings: list[str] = field(default_factory=list)
+    #: The multiplier the drawdown overlay applied on each bar (1.0 when it is off).
+    exposure_scale: list[float] = field(default_factory=list)
 
     # -- derived, trade-level views -------------------------------------------
 
@@ -241,6 +286,7 @@ def run_backtest(
     *,
     label: str = "strategy",
     strict: bool = False,
+    drawdown_scale: DrawdownScale | None = None,
 ) -> BacktestResult:
     """Run one strategy over one series.
 
@@ -267,6 +313,11 @@ def run_backtest(
     trades: list[Trade] = []
     open_trade: Trade | None = None
     fees_paid = 0.0
+    # What the strategy asked for, after the drawdown overlay has had its say. The
+    # book and the zero-cost cross-check both read this, so they stay the same run.
+    effective = list(targets)   # index 0 keeps what the strategy asked: nothing to scale yet
+    scales = [1.0] * n
+    peak_equity = 1.0
 
     wiped_out_at: int | None = None
 
@@ -279,6 +330,12 @@ def run_backtest(
 
         prev = positions[i - 1]
         pos = float(targets[i - 1])
+        if drawdown_scale is not None:
+            peak_equity = max(peak_equity, equity[i - 1])   # the account's own high
+            factor = drawdown_scale.factor(equity[i - 1], peak_equity)
+            scales[i] = factor
+            effective[i] = pos * factor
+            pos = effective[i]
         # The move into open[i] belongs to `prev`: the exposure already held
         # when bar i-1 opened. The decision `pos` is only credited from open[i].
         before_costs = equity[i - 1] * (1.0 + prev * (bars[i].open / bars[i - 1].open - 1.0))
@@ -374,7 +431,7 @@ def run_backtest(
 
     result = BacktestResult(
         label=label,
-        targets=list(targets),
+        targets=list(effective),
         positions=positions,
         equity=equity,
         trades=trades,
@@ -383,7 +440,8 @@ def run_backtest(
         performance=perf,
         gross_equity=gross_equity,
         benchmark=buy_and_hold(bars, costs, timeframe),
-        close_fill_equity=close_fill_final_equity(bars, targets, costs),
+        close_fill_equity=close_fill_final_equity(bars, effective, costs),
+        exposure_scale=scales,
     )
 
     if wiped_out_at is not None:
@@ -559,6 +617,7 @@ def restrict(
         benchmark=buy_and_hold_bars(window, timeframe, result.costs),
         close_fill_equity=close_fill_final_equity(window, targets, result.costs),
         warnings=list(result.warnings),
+        exposure_scale=[result.exposure_scale[i] for i in inside] if result.exposure_scale else [],
     )
     if any(t.entry_index == start and t.equity_at_entry == 1.0 and t.bars_held for t in trades):
         restricted.warnings.append(

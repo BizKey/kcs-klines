@@ -28,7 +28,7 @@ place is, and what has already been learned the hard way.
 | `src/` | Rust collector: `kucoin/client.rs`, `storage/parquet_store.rs`, `collector.rs`, `verify.rs`, `status.rs` |
 | `tests/` | Rust tests; `live_api.rs` is `--ignored` and hits the real exchange |
 | `analysis/src/analysis/` | `data.py` `metrics.py` `engine.py` `report.py` `journal.py` `walkforward.py` `portfolio.py` `basket.py` `riskparity.py` `run_backtest.py`, `strategies/`, `tests/` |
-| `analysis/src/analysis/tests/` | 376 pytest tests (engine invariants, registry-wide strategy checks, CLI, journal, walk-forward, portfolio, basket, real-data regression) |
+| `analysis/src/analysis/tests/` | 385 pytest tests (engine invariants, registry-wide strategy checks, CLI, journal, walk-forward, portfolio, basket, real-data regression) |
 | `analysis/out/` | artifacts (CSV/JSON/SVG), gitignored |
 | `analysis/README.md` | the toolkit in detail; `journal/README.md` the journal format |
 | root `README.md` | the collector in detail (KuCoin API traps, schema, scheduling) |
@@ -38,7 +38,7 @@ place is, and what has already been learned the hard way.
 ```bash
 cargo test && cargo clippy --all-targets      # Rust
 uv sync                                       # Python env (installs the analysis member)
-uv run pytest                                 # 376 tests, ~26 s
+uv run pytest                                 # 385 tests, ~22 s
 uv run kcs-backtest --list                    # 16 registered strategies + their parameters
 uv run kcs-backtest --strategy tsmom --param lookback=720 --param rebalance=168
 uv run kcs-backtest --symbol BTC-USDT --last 1y   # only the last year, warm history
@@ -334,6 +334,22 @@ Sharpe 0.38 on 1h.
   single rule (12.41x, 0.75), worse than the best (Ichimoku 24.67x), and the honest choice
   when you refuse to pick a winner on hindsight. So: pick the simplest trend rule you will
   follow, or average several, and spend the effort on the universe, the grid and the exit.
+* **A drawdown overlay is a dial, not an edge — and a zero floor is a trap.** Implemented
+  in the engine (`DrawdownScale`, `--dd-scale 10,40,25`): the target exposure is multiplied
+  each bar by a factor that is 1.0 within 10% of the account's own high-water mark, falls
+  linearly to 0.25 at −40%, and recovers on its own, reading the equity the same bar
+  produced so it cannot look ahead. Measured across three rules on BTC daily over 8.8
+  years: TSMOM 24.94x at Sharpe 0.80 and −65.6% drawdown → **12.25x at 0.78 and −44.1%**;
+  SMA 200 12.15x/0.67/−64.1% → 6.51x/**0.68**/−43.3%; `voltarget-sma` 8.12x/0.79/−45.4% →
+  5.26x/0.77/−35.8%; a gentler 20,50,50 splits the difference (18.88x/0.78/−55.3%). Sharpe
+  does not move — return and drawdown fall together, which makes it a preference dial, not
+  an improvement, and on the last five years it costs more Sharpe than it saves (0.55 →
+  0.48) because it de-risks after the fall and re-risks after the recovery. **`15,30,0`
+  turned 24.94x into 1.36x** (CAGR 3.5%, Sharpe 0.23): a flat account's drawdown never
+  shrinks, so the factor never returns — the docstring says so and the measurement agrees.
+  The book still balances with the overlay on (`prod(1 + net) == final equity`, error
+  1.1e-16), and the multiplier is kept per bar in `exposure_scale` and sliced through
+  `restrict` like everything else.
 * **Two accounting bugs the trend rule exposed.** (1) A gated rebalance used to skip the
   *benchmark* as well, because the book's fill and the passive fill shared one `if pending`
   block — the passive comparison must re-equalise on the grid whether or not the book has
