@@ -309,6 +309,22 @@ Sharpe 0.38 on 1h.
   health screen: it buys **continuity and liquidity** (a pair that has traded for years can
   still be executed in and out of), which is why it cut the commission bill from 145% to
   17% of capital and volatility from 111% to 33%.
+* **Time-series momentum and cross-sectional momentum are different bets, and only one
+  of them works here.** TSMOM compares an asset with **its own** past (long while its own
+  trailing return is positive, flat otherwise) — it needs a trend and it is what this
+  repository validated: BTC 1d weekly +2,394% over 8.8 years at Sharpe 0.80, and across
+  the archive it loses on the median asset (−24.5%) while beating holding on **88%** of
+  966 series. Cross-sectional momentum compares assets **with each other** (rank by
+  trailing return, buy the top quantile, optionally short the bottom) — it needs
+  *dispersion*, and here it loses in every form: all pairs −81.39% against −49.31% for
+  equal weight; with the survivor filter the argument demands (412 names, three years of
+  history) **−82.49%** against −40.66%; the top 10 names by rank −77.70% with a −98.4%
+  drawdown; and long/short was **−100% by 2017-12-20**, dead after three rebalances.
+  Note what that says: the history filter moved the *passive baseline* nine points and the
+  *ranking* none, so it is the ranking — not the graveyard universe — that makes the
+  cross-section lose. Related names that are **not** cross-sectional: `tsmom-ls`/`sma-ls`
+  (still time-series, just always in the market) and `tsmom-blend` (several horizons of
+  the *same* asset). Dual momentum (relative pick + absolute filter) is not measured here.
 * **The indicator zoo is one trade in thirty costumes.** Thirty classic indicator rules
   through one harness (signal on a close, held over the next close-to-close move, 0.1% a
   side, long or cash), then twenty of them screened over **529 daily series** with 500+

@@ -161,6 +161,25 @@ Cross-sectional momentum over all pairs returned **−81.2%** against −47.4% f
 equal weighting; restricted to the top 5 by momentum it returned +2.6% over nine
 years while paying 46.8% of capital in commission and drawing down −97.4%.
 
+**It is the ranking, not the universe.** Re-run with the history filter that the
+survivor argument asks for (412 names with three years of bars instead of 886 with one),
+cross-sectional momentum ranked by trailing 30-day return, rebalanced monthly:
+
+| universe | top 20% by momentum | equal weight of the same universe |
+|---|---|---|
+| all pairs (886) | −81.39% (Sharpe −0.27, DD −91.2%) | −49.31% |
+| **three years of history (412)** | **−82.49%** (−0.28, −91.4%) | −40.66% |
+| three years, top **10 names** | −77.70% (−0.17, **DD −98.4%**) | −40.66% |
+| three years, long/**short** | **−100%**, dead by 2017-12-20 after three rebalances | −40.66% |
+
+The filter moved the *passive* baseline by nine points (−49% → −41%) and the momentum
+book by none (−81% → −82%). So the graveyard explains why the *universe* loses, not why
+the *ranking* loses: selecting the strongest trailing return picked names that then did
+worse than the average pair, in both universes. That is the opposite of the cross-sectional
+premise, and it is the cleanest statement of why this repository's working rule is
+**time-series** momentum (compare an asset with its own past) and not the **cross-sectional**
+kind (compare assets with each other).
+
 ### 1.3 Costs
 
 KuCoin spot VIP0 is not 0.1% for everyone: class A is 0.1/0.1% maker/taker, class
@@ -592,7 +611,11 @@ treat any single multiple as noise until a walk-forward agrees with it.
    hand-picked survivors. Replace it with a rule — e.g. every perp-listed pair
    with 5+ years of history, re-selected quarterly on data available at the time —
    and re-measure the basket. If the edge survives a rule-based universe it is
-   real; if it does not, the +207% was selection.
+   real; if it does not, the +207% was selection. *Partly answered since this was
+   written:* applying the history filter to the cross-sectional book moved the passive
+   baseline nine points and the momentum ranking none (§1.2), so a rule-based universe
+   will not rescue a ranking that is anti-informative — the open question is whether it
+   rescues the *basket of hand-picked survivors*, which is a different test.
 2. **Per-symbol spread and slippage** instead of a flat 0.1% taker. This is the
    last unmodelled part of the cost picture and it bites exactly the pairs that
    produce the tail.
