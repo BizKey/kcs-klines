@@ -18,8 +18,15 @@ place is, and what has already been learned the hard way.
   on any number from this repository.
 * **`journal/`** — append-only JSONL run records, **tracked in git on purpose**.
   Currently empty: the human records their own runs there.
-* `data/` (1.4 GB, 996 symbols, gitignored) is the archive. It is **alive**: a
-  collector run can append bars while you are working.
+* `data/` (1.4 GB, **998 symbols / 4,971 series**, gitignored) is the archive. It is
+  **alive**: a collector run can append bars while you are working. Two things to know
+  about what is in it. First, the exchange now lists **tokenised equities** alongside
+  crypto (`AAPLX-USDT` near $338, `HOODX-USDT` near $119, `4STOCK-USDT`): they trade like
+  spot pairs but follow stocks, and every universe in this repository selects by turnover
+  without knowing the difference — include them on purpose or filter them, but do not
+  take them by accident. Second, a couple of series lag the collector (`WMTX-USDT` by six
+  days, `WLFI-USD1` hourly); everything else is current, and the daily calendar ends on
+  the newest bar available.
 
 ## Map
 
