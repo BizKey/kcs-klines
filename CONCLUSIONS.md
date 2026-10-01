@@ -269,6 +269,50 @@ winners are illiquid early names. That is the opposite of what the cross-section
 needed (§1.2), so the two rules want different universes — a conclusion that only exists
 because both were measured against the same engine.
 
+### 1.2c The best configuration found so far: trend + a volatility target on liquid names
+
+Everything above says the same thing three times: the universe decides, the exit matters, and
+sizing changes the shape of the distribution. Put together on the one universe where this
+repository's edge has never been fragile — a basket of five liquid majors (`kcs-basket`,
+daily bars, 2021-08-04 … 2026-09-30, the 5.16 years every leg shares) — a slow SMA filter
+with the position scaled to a volatility target is the best risk-adjusted result measured
+anywhere in this project:
+
+| configuration | total | holding the same five | Sharpe | max DD |
+|---|---|---|---|---|
+| `voltarget-sma` window 50, target 30% | **+126.87%** | +114.23% | **0.99** | −19.9% |
+| `voltarget-sma` window 150, target 25% | +74.24% | +114.23% | 0.79 | **−14.2%** |
+| `voltarget-sma` window 250, target 40% | +96.08% | +114.23% | 0.59 | −24.0% |
+| `sma` window 200, no sizing | +127.84% | +114.23% | 0.42 | −39.9% |
+| `tsmom` 30/7 | +151.00% | +114.23% | 0.48 | −41.6% |
+| the five held equally | +114.23% | — | ~0.35 | **−78.6%** |
+
+The grid is a **plateau, not a point** — Sharpe by (window × target) on the same window, and
+every cell is at least 0.60:
+
+| window | target 20% | 25% | 30% | 40% |
+|---|---|---|---|---|
+| 50 | 1.02 | 1.00 | 0.98 | 0.93 |
+| 100 | 0.75 | 0.73 | 0.71 | 0.67 |
+| 150 | 0.86 | 0.84 | 0.81 | 0.77 |
+| 200 | 0.74 | 0.72 | 0.70 | 0.66 |
+| 300 | 0.68 | 0.66 | 0.64 | 0.60 |
+
+Read it honestly. **The trend rows do not beat the passive hold on return** in this window —
++114% for holding five majors against +74…+151% for the rules — because 2021-2026 was a bull
+market for exactly these names. What they buy is **risk**: Sharpe 0.79-0.99 and a drawdown of
+−14…−24% against ~0.35 and −78.6%, and the best row (window 50, target 30%) beats the hold on
+both. The mechanism is visible in the same report: **only 18.8% of the capital is in the
+assets on average** — the rest waits in cash, and the volatility target is what keeps it
+there when the market is wild. Two caveats carry real weight: the five names were chosen
+knowing they survived (§7 thread 1), and the fees are 3.11% of capital, so this is a
+low-turnover configuration, not a cheap one to run on a thousand pairs. The rule-picked
+analogue already exists in `kcs-riskparity` (top 5 by trailing turnover, three years of
+history, 40% volatility budget, `--trend 200d`): +868% at Sharpe 0.68 with a −47.7% drawdown
+over 8.93 years, against BTC's own 0.46 and −82.9%. **The missing piece is the same sizing on
+the gated wide book** — `kcs-portfolio` still has no volatility target, so the two halves of
+this toolkit (`kcs-riskparity`'s sizing, `kcs-portfolio`'s universe) have not been joined yet.
+
 ### 1.3 Costs
 
 KuCoin spot VIP0 is not 0.1% for everyone: class A is 0.1/0.1% maker/taker, class

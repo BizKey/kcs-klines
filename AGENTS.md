@@ -516,6 +516,21 @@ Sharpe 0.38 on 1h.
   five columns of the sweep came out identical. The fix each time was the same: run one rule
   through both the harness and `kcs-backtest` and compare (7/7 on BTC: engine 9.6239x,
   harness 9.6372x once aligned).
+* **The best risk-adjusted configuration measured so far: slow trend + a volatility target on
+  five liquid majors** (`kcs-basket --timeframe 1d`, 2021-08-04 … 2026-09-30, 5.16 years):
+  `voltarget-sma` window 50 / target 30% returns **+126.87%** at **Sharpe 0.99** and a −19.9%
+  drawdown; window 150 / target 25% returns +74.24% at 0.79 with a **−14.2%** drawdown; plain
+  `sma` 200 is +127.84% at 0.42 with −39.9%; holding the same five equally is +114.23% at
+  ~0.35 with −78.6%. The (window × target) grid is a broad plateau — every cell has Sharpe
+  ≥ 0.60 (50→1.02/1.00/0.98/0.93, 100→0.75…0.67, 150→0.86…0.77, 200→0.74…0.66,
+  300→0.68…0.60) — so this is not a tuned point. Two honest caveats: the rules **do not beat
+  the passive hold on return** in this window (the hold made +114%); what they buy is risk,
+  and the best row beats it on both. And **only 18.8% of the capital is in the assets on
+  average** — the rest waits in cash, which is what the volatility target does. The five names
+  were picked knowing they survived (§7 thread 1), and the rule-picked analogue is
+  `kcs-riskparity --top 5 --min-history 3y --vol-budget 0.4 --trend 200d` (+868%, Sharpe
+  0.68, −47.7% over 8.93 years against BTC's 0.46/−82.9%). **The gap left open: `kcs-portfolio`
+  has no volatility target**, so the sizing half and the universe half still are not joined.
 * **A sweep whose columns are all identical is a broken sweep, not a discovery.** Two of my
   own experiment scripts failed this way while hunting the health filter, and both produced
   confident tables: (1) the trend-window sweep gave byte-identical results for 50/100/150/

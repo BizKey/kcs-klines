@@ -81,6 +81,46 @@ class Rebalance:
 
 
 @dataclass(frozen=True)
+class VolTarget:
+    """Book-level sizing: hold `target` annualised volatility, up to `cap` of the capital.
+
+    The reading comes from the *unscaled* book — the same names at full size — over the last
+    `window` rebalance periods, so the estimate never sees the future and never feeds on its
+    own scaling. Measuring the account instead would divide by a volatility that already
+    contains the multiplier and turn the dial into a feedback loop.
+    """
+
+    target: float = 0.0        # 0 = off
+    window: int = 12           # rebalance periods, not bars
+    cap: float = 1.0           # never gear up beyond this
+    floor: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.target < 0:
+            raise ValueError("vol target is a magnitude and cannot be negative")
+        if self.window < 2:
+            raise ValueError("vol window must be at least 2 rebalance periods")
+        if not 0.0 <= self.floor <= self.cap <= 1.0:
+            raise ValueError(
+                f"need 0 <= floor <= cap <= 1 (got floor={self.floor}, cap={self.cap})"
+            )
+
+    @property
+    def active(self) -> bool:
+        return self.target > 0
+
+    @property
+    def min_observations(self) -> int:
+        return min(5, self.window)
+
+    def describe(self) -> str:
+        return (
+            f"{self.target:.0%} annualised over {self.window} rebalances "
+            f"(cap {self.cap:g}, floor {self.floor:g})"
+        )
+
+
+@dataclass(frozen=True)
 class GateSpec:
     """Which health conditions a symbol must pass to be a candidate.
 
@@ -189,6 +229,9 @@ class PortfolioResult:
     #: rebalance on average (`None` = no gates).
     gates: "GateSpec | None" = None
     gated_mean: float = 0.0
+    #: The volatility target and the multiplier it applied at each rebalance.
+    vol_target: "VolTarget | None" = None
+    vol_scales: list[float] = field(default_factory=list)
     #: The quote filter the run used (`None` = every pair on disk) and how many pairs it
     #: skipped, so the report can say what the universe actually was.
     quotes: tuple[str, ...] | None = ("USDT",)
@@ -198,6 +241,11 @@ class PortfolioResult:
     #: Filled by the CLI so the report and the JSON can list the pairs without the
     #: caller re-passing the panels; empty when the result was built by hand.
     pairs: list[dict] = field(default_factory=list)
+
+    @property
+    def mean_scale(self) -> float:
+        """The average exposure multiplier the volatility target applied (1.0 = off)."""
+        return statistics.fmean(self.vol_scales) if self.vol_scales else 1.0
 
     def pair_stats(self) -> list[dict]:
         """Per-pair rows, busiest first (empty unless `pairs` was filled in)."""
@@ -228,6 +276,8 @@ class PortfolioResult:
             "cash_share": self.cash_share,
             "gates": self.gates.describe() if self.gates else "none",
             "gated_per_rebalance": self.gated_mean,
+            "vol_target": self.vol_target.describe() if self.vol_target else "off",
+            "mean_exposure_multiplier": self.mean_scale,
             "quotes": list(self.quotes) if self.quotes else "any",
             "skipped_pairs": self.skipped_pairs,
             "pairs_traded": sum(1 for row in self.pairs if row["held"]),
@@ -491,6 +541,7 @@ def run_portfolio(
     bars_per_year: float = 365.0,
     select_mode: str = "rank",
     gates: GateSpec | None = None,
+    vol_target: VolTarget | None = None,
     quotes: tuple[str, ...] | None = ("USDT",),
     skipped_pairs: int = 0,
     threshold: float = 0.0,
@@ -519,6 +570,9 @@ def run_portfolio(
 
     wiped_out: int | None = None
     gated_total = 0
+    vol = vol_target or VolTarget()
+    book_returns: list[float] = []      # the unscaled book's own period returns
+    scales: list[float] = []
     for k in range(len(dates) - 1):
         momentum = {}
         gated_here = 0
@@ -535,11 +589,26 @@ def run_portfolio(
             momentum, top, mode, select_mode=select_mode, threshold=threshold
         )
         side = 0.5 if mode == "long-short" and shorts else 1.0
-        targets: dict[str, float] = {}
+        unscaled: dict[str, float] = {}
         for symbol in longs:
-            targets[symbol] = targets.get(symbol, 0.0) + side / len(longs)
+            unscaled[symbol] = unscaled.get(symbol, 0.0) + side / len(longs)
         for symbol in shorts:
-            targets[symbol] = targets.get(symbol, 0.0) - side / len(shorts)
+            unscaled[symbol] = unscaled.get(symbol, 0.0) - side / len(shorts)
+
+        # Size the book to a volatility target, decided from the unscaled book's own
+        # completed periods. Too little history means "stay unscaled" rather than "sell".
+        scale = 1.0
+        if vol.active:
+            seen = book_returns[-vol.window :]
+            if len(seen) >= vol.min_observations:
+                sigma = statistics.pstdev(seen) * math.sqrt(per_year)
+                scale = (
+                    vol.cap
+                    if sigma <= 0
+                    else max(vol.floor, min(vol.cap, vol.target / sigma))
+                )
+        scales.append(scale)
+        targets = {symbol: weight * scale for symbol, weight in unscaled.items()}
 
         # 1. Trade at this close, before the new book earns anything. `weights` is the
         #    book that arrived here (drifted to this close by the previous iteration), so
@@ -572,7 +641,9 @@ def run_portfolio(
         #    late (seven bars on a weekly grid, thirty on a monthly one), so the measured
         #    rule was not the rule the report described.
         growth = 1.0
+        full_growth = 1.0
         drifted: dict[str, float] = {}
+        ratios: dict[str, float] = {}
         for symbol, weight in weights.items():
             panel = by_symbol[symbol]
             start, end = panel.closes[k], panel.closes[k + 1]
@@ -582,8 +653,19 @@ def run_portfolio(
                 dropped += 1
                 end = start
             ratio = end / start
+            ratios[symbol] = ratio
             growth += weight * (ratio - 1.0)
             drifted[symbol] = weight * ratio
+        for symbol, weight in unscaled.items():
+            ratio = ratios.get(symbol)
+            if ratio is None:
+                panel = by_symbol[symbol]
+                start, end = panel.closes[k], panel.closes[k + 1]
+                if not start:
+                    continue
+                ratio = (end or start) / start
+            full_growth += weight * (ratio - 1.0)
+        book_returns.append(full_growth - 1.0)
         value_after = value * growth
         # Normalise the drifted book back to the capital it now represents, so the
         # weights sum to it again (1 for a long-only book, 0 for long/short) and the
@@ -627,6 +709,8 @@ def run_portfolio(
         dropped=dropped,
         gates=gates,
         gated_mean=gated_total / max(len(dates) - 1, 1),
+        vol_target=vol_target,
+        vol_scales=scales,
         quotes=quotes,
         skipped_pairs=skipped_pairs,
         warnings=warnings,
@@ -1045,6 +1129,12 @@ def render(result: PortfolioResult, dates: list[int]) -> str:
         f"universe    : {result.universe} symbols {quoted}{skipped}, "
         f"{len(result.rebalances)} rebalances, ~{result.holdings_mean:.0f} positions each"
     )
+    if result.vol_target is not None and result.vol_target.active:
+        add(
+            f"sizing      : {result.vol_target.describe()} — average multiplier "
+            f"{result.mean_scale:.2f}, so ~{result.mean_scale:.0%} of the capital was "
+            "at work"
+        )
     if result.gates is not None and result.gates.active:
         add(
             f"gates       : {result.gates.describe()} — dropped ~{result.gated_mean:.0f} "
@@ -1182,6 +1272,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="write a second SVG: every asset's price with the prices it was bought and sold at",
     )
+    parser.add_argument("--vol-target", default="0%",
+                        help="hold this annualised volatility for the whole book, "
+                             "e.g. 25%% (0%% = off)")
+    parser.add_argument("--vol-window", type=int, default=12,
+                        help="rebalance periods used to measure the book's volatility "
+                             "(default: %(default)s)")
+    parser.add_argument("--vol-cap", type=float, default=1.0,
+                        help="never hold more than this share of the capital (default: %(default)s)")
+    parser.add_argument("--vol-floor", type=float, default=0.0,
+                        help="never hold less than this share (default: %(default)s)")
     parser.add_argument("--trend-gate", type=int, default=0,
                         help="require the close above its own mean of N bars (0 = off)")
     parser.add_argument("--trend-threshold", default="0%",
@@ -1298,6 +1398,15 @@ def main(argv: list[str] | None = None) -> int:
         )
     except ValueError as error:
         raise SystemExit(str(error)) from error
+    try:
+        vol_target = VolTarget(
+            target=abs(threshold_of(args.vol_target)),
+            window=args.vol_window,
+            cap=args.vol_cap,
+            floor=args.vol_floor,
+        )
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
     gate_seconds = (args.gate_window or args.lookback) * step
 
     panels: list[Panel] = []
@@ -1341,6 +1450,7 @@ def main(argv: list[str] | None = None) -> int:
         select_mode=args.select,
         threshold=threshold,
         gates=gates,
+        vol_target=vol_target,
         quotes=quotes,
         skipped_pairs=skipped,
     )

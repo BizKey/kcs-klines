@@ -864,3 +864,79 @@ def test_the_gates_never_see_the_future():
     )
     for name in ("below_peak", "trend", "volatility"):
         assert before.gates[name][:2] == after.gates[name][:2]
+
+
+# --- sizing the book to a volatility target ------------------------------------
+
+
+def _rising_panel(name="UP-USDT", drift=0.02, count=500):
+    return portfolio.build_panel(*series([drift] * count), name, daily_dates(), 30 * STEP)
+
+
+def test_a_vol_target_off_changes_nothing():
+    panels, dates = rise_then_fall_panels()
+    plain = portfolio.run_portfolio(
+        panels, dates, lookback=30, rebalance=30, select_mode="sign",
+        costs=Costs(fee_per_side=0.001), label="plain",
+    )
+    sized = portfolio.run_portfolio(
+        panels, dates, lookback=30, rebalance=30, select_mode="sign",
+        costs=Costs(fee_per_side=0.001), label="sized", vol_target=portfolio.VolTarget(),
+    )
+    assert sized.equity == plain.equity
+    assert sized.fees_paid == pytest.approx(plain.fees_paid)
+    assert sized.mean_scale == 1.0
+
+
+def test_a_wild_book_is_scaled_down_and_a_calm_one_is_not():
+    dates = daily_dates(count=40)
+    wild = [portfolio.build_panel(*series([0.20 if k % 2 else -0.20] * 500), "WILD-USDT", dates, 30 * STEP)]
+    calm = [portfolio.build_panel(*series([0.002] * 500), "CALM-USDT", dates, 30 * STEP)]
+    for panels, cap in ((wild, None), (calm, 0.5)):
+        sized = portfolio.run_portfolio(
+            panels, dates, lookback=30, rebalance=30, select_mode="sign",
+            costs=Costs(fee_per_side=0.0), label="sized",
+            vol_target=portfolio.VolTarget(target=0.25, window=5, cap=cap or 1.0),
+        )
+        if cap is None:
+            assert sized.mean_scale < 1.0            # too wild: hold less
+        else:
+            assert sized.mean_scale == pytest.approx(cap)   # calm: capped, never geared
+    assert sized.mean_scale <= 1.0
+
+
+def test_the_sizing_reading_never_sees_the_future():
+    dates = daily_dates(count=30)
+    closes = [100.0 * (1.02**i) for i in range(500)]
+    times = [START + i * STEP for i in range(500)]
+    panel = portfolio.build_panel(times, closes, "X-USDT", dates, 30 * STEP)
+    first = portfolio.run_portfolio(
+        [panel], dates, lookback=30, rebalance=30, select_mode="sign",
+        costs=Costs(fee_per_side=0.0), label="a",
+        vol_target=portfolio.VolTarget(target=0.25, window=5),
+    )
+    rewritten = list(closes)
+    rewritten[-1] *= 40.0                      # a violent move after every decision
+    again = portfolio.run_portfolio(
+        [portfolio.build_panel(times, rewritten, "X-USDT", dates, 30 * STEP)], dates,
+        lookback=30, rebalance=30, select_mode="sign", costs=Costs(fee_per_side=0.0),
+        label="b", vol_target=portfolio.VolTarget(target=0.25, window=5),
+    )
+    assert first.vol_scales[:-1] == again.vol_scales[:-1]
+
+
+def test_sizing_down_pays_commission_and_the_orders_are_validated():
+    panels, dates = rise_then_fall_panels()
+    with pytest.raises(ValueError):
+        portfolio.VolTarget(target=-0.1)
+    with pytest.raises(ValueError):
+        portfolio.VolTarget(window=1)
+    with pytest.raises(ValueError):
+        portfolio.VolTarget(target=0.2, floor=0.8, cap=0.5)
+    sized = portfolio.run_portfolio(
+        panels, dates, lookback=30, rebalance=30, select_mode="sign",
+        costs=Costs(fee_per_side=0.001), label="sized",
+        vol_target=portfolio.VolTarget(target=0.05, window=3),
+    )
+    assert sized.fees_paid > 0
+    assert len(sized.vol_scales) == len(sized.rebalances)
