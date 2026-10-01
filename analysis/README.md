@@ -117,10 +117,121 @@ SMA 200 (3000/1000 split) returns **+10.5%** out of sample against **+729%** for
 buy & hold, while TSMOM rebalanced weekly returns **+1086%** against **+875%**
 with a better Sharpe (0.66 vs 0.43) and a shallower drawdown (-54% vs -78%).
 
-`kcs-portfolio` ranks the whole archive's daily universe by momentum, holds the
-top slice in equal weights, charges commission on realised turnover, and compares
+`kcs-portfolio` slices the whole archive's daily universe by momentum, holds the
+chosen names in equal weights, charges commission on realised turnover, and compares
 against the same universe held passively. It reads only the `time` and `close`
 columns, so ~950 symbols take seconds rather than minutes.
+
+**Two ways to choose the slice**, and they are different bets:
+
+```bash
+# rank: the top of the cross-section (the classic cross-sectional momentum)
+uv run kcs-portfolio --timeframe 1d --lookback 30 --rebalance 30 --top 0.2
+
+# sign: everything that cleared a bar — "buy what rose, sell what fell"
+uv run kcs-portfolio --timeframe 1d --lookback 30 --rebalance 30 --select sign --threshold 0
+uv run kcs-portfolio --timeframe 1d --lookback 30 --rebalance 30 --select sign --threshold 5%
+uv run kcs-portfolio --timeframe 1d --lookback 30 --rebalance 30 --select sign --last 60
+uv run kcs-portfolio --timeframe 1d --lookback 30 --rebalance 30 --select sign --chart out.svg
+```
+
+* `--select rank` (the default) takes a slice of the sorted cross-section: `--top`
+  is a fraction below 1 or an absolute count at 1 or more. It holds the same number
+  of names whatever the market does.
+* **`--quote` decides which pairs are in the universe at all.** The default is
+  **`USDT`**: only pairs settled in tether, because a cross pair like `ADA-BTC` is a
+  different bet — its price is a ratio of two crypto assets, so the dollar move cancels out
+  and holding it silently adds a second exposure (plus a second currency to fund) that the
+  rule never asked for. `--quote USDT,USDC` widens it to both dollar stables, `--quote any`
+  restores the old "every pair on disk" behaviour, and the report always says what it did
+  (`836 symbols quoted in USDT, 156 other pairs skipped`). Measured on the same 7/7 sign
+  configuration over nine years, the filter is worth real money — cross pairs were a drag:
+
+  | universe | pairs | total | CAGR | Sharpe | max DD |
+  |---|---|---|---|---|---|
+  | `--quote USDT` (default) | 836 | +1,141.23% | 32.5% | 0.30 | −92.6% |
+  | `--quote any` | 992 | **+3,339.12%** | 48.4% | 0.57 | −81.4% |
+
+  which is the *opposite* of what this table said before the timing fix in §3 of
+  `CONCLUSIONS.md` — under the old one-rebalance lag the narrower USDT universe looked
+  better (+2,954% against +1,651%), and on the monthly grid too (sign +610.85% with USDT
+  only against `--quote any` +1,782.88%; `rank --top 0.2` −45.38% against +238.47%). So
+  choose the quote for what the strategy *is* — one settlement currency, one exposure per
+  asset — not for what it earned here. What the filter does keep doing is removing the pair
+  that cannot move: `USDT-USDC` is quoted in USDC, so the USDT rule drops the busiest row of
+  the trade census (241 trades on a stablecoin), and `--quote USDT,USDC` measures within a
+  point of `--quote USDT`. Fee totals are in starting-capital units and grow with the curve
+  (860.6% on the USDT book at 1.30 turnover per rebalance) — the turnover is what compares;
+* `--select sign` takes **every** symbol whose trailing return beats `--threshold`
+  (`0` means "it rose", `5%` is stricter, negative values buy what fell). It is a
+  filter, not a ranking, so its breadth moves with the market: many names in a bull
+  tape, few in a decline, and **nothing at all** when nothing qualifies — the book
+  goes to cash and pays the commission to get there. That liquidation is the
+  strategy, not an edge case: the report counts those rebalances (`cash`) and the
+  result warns how often it happened.
+* `--last N` reports only the newest `N` rebalances. Warm-up still uses the history
+  before them, so an indicator is never cold at the window's start, and the curve is
+  the portfolio's own (nothing is rebased from the longer run).
+* the console report lists **which pairs were actually traded**: how many of the universe
+  were held at least once, how many were never bought, and a table of the busiest ones
+  (rebalances held, entries, exits, first and last date in the book).
+  `--pairs-csv PATH` writes the full census — one row per symbol the run *watched*,
+  including the ones it never bought (`ever_traded = no`, `rebalances_held = 0`), with
+  `symbol, rebalances_held, buys, sells, shorts, covers, first_held_utc, last_held_utc`.
+  It is the file to read when asking "what did this rule actually do": on the 7/7 sign run
+  over 992 pairs with `--quote any`, **980 were held at least once and 12 never were** — the filter is not
+  selective about *which* pairs it trades, it is selective about *when* (breadth swings
+  1 … 688), and the busiest rows show the cost of that (`USDT-USDC` 241 trades,
+  `LTC-BTC` 235, `LTC-USDT` 234);
+* `--chart-trades PATH` writes a **second** chart: one line per asset (its close on the
+  rebalance grid, so the marked points *are* the fill prices this module charges commission
+  on), a **green dot where the book bought it** and a **red square where it sold it**, with
+  the actual price in the tooltip (`BTC-USDT bought 2017-10-26 at 6010`). Assets the rule
+  never bought are drawn as a **grey dashed** line — the honest picture of a filter, since
+  most of the universe is watched and never held. `--chart-symbols N` caps the drawing
+  (default 40, most-held assets first, with a fifth of the budget for the grey ones): a
+  weekly rule on a 146-name book makes ~10,000 trades over nine years, and drawing them all
+  is a grey rectangle, not a chart;
+* `--chart PATH` writes the portfolio against its benchmark as an SVG — the same
+  hand-written chart the rest of the toolkit produces, with a dashed line at each curve's
+  final multiple and **vertical markers only where the book entered or left cash**
+  (green for back in, red for to cash, with the name count and turnover in the tooltip).
+  Breadth is deliberately *not* marked: on a wide universe it swings from 1 to 578 names
+  and would draw forty lines out of a hundred rebalances, so the report states it as a
+  number instead (`breadth: 0 … 24 … 408 names (min / median / max)`). A ranking book
+  enters once and never leaves, so its chart has a single marker.
+
+**This rule is not the same strategy as `--strategy tsmom`, even though the signal is
+identical** (`Tsmom.threshold` is this `--threshold`). A single-asset TSMOM is out of the
+market 46% of the time on BTC and pays ~20% of capital in commission over nine years; the
+same 7/7 signal applied to every pair holds 146 names, is never out of the market, turns the
+book over ~630 times and pays **1,348%** of capital — which is why the portfolio version ends
+at −69% over the last five years where the single-asset version made +86.7%. The wider the
+book, the more the exit half of the signal is neutralised, and the more the commission bill
+decides the result: at 0.00/0.05/0.10/0.20/0.30% per side the same 7/7 run returns
++3,197/+2,303/+1,651/+829/+392%. A control that holds every pair with the same weekly
+re-equalisation and no filter at all returns +350% at 0.11 turnover per rebalance.
+
+Measured over the whole daily archive (2017-11 … 2026-09, 0.1%/side, 30-bar lookback
+and rebalance, fees as a share of starting capital) — **before the timing fix** described
+in `CONCLUSIONS.md` §3, kept here because the ordering it shows is what the fix preserved:
+with correct timing the same grid gives `sign --threshold 0` +1,782.88% at Sharpe 0.43 and
+`rank --top 0.2` +238.47% at 0.19 on `--quote any`, and +610.85% against −45.38% on the
+USDT-only universe:
+
+| selection | result | equal-weight universe | Sharpe | max DD | names held |
+|---|---|---|---|---|---|
+| `--select rank --top 0.2` | **−81.18%** | −47.39% | −0.27 | −91.0% | ~64 |
+| `--select sign --threshold 0` | **+0.51%** | −47.39% | 0.00 | −88.1% | ~120 |
+| `--select sign --threshold 5%` | −13.08% | −47.39% | −0.02 | −92.0% | fewer |
+| `--select sign --threshold -5%` (buy the fallen) | +16.51% | −47.39% | 0.02 | −87.2% | ~few |
+| any of them, `--mode long-short` | **−100%** | −47.39% | — | −100% | — |
+
+The filter beats the ranking by a wide margin and the short side is wiped out, which
+is the same conclusion the rest of this repository reached from the other direction:
+**the universe, not the signal, decides**, and on a universe of ~950 pairs including
+the dying ones no selection rule rescues the result. The same `sign` rule over the
+last five years loses 86% of the capital while the passive book loses 59%.
 
 `kcs-basket` is the one in between: you name the legs and it tells you what the
 account looks like.

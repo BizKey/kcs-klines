@@ -18,15 +18,16 @@ place is, and what has already been learned the hard way.
   on any number from this repository.
 * **`journal/`** — append-only JSONL run records, **tracked in git on purpose**.
   Currently empty: the human records their own runs there.
-* `data/` (1.4 GB, **998 symbols / 4,971 series**, gitignored) is the archive. It is
+* `data/` (1.4 GB, **998 symbols / 4,990 series** — every symbol now has all five
+  timeframes, gitignored) is the archive. It is
   **alive**: a collector run can append bars while you are working. Two things to know
   about what is in it. First, the exchange now lists **tokenised equities** alongside
   crypto (`AAPLX-USDT` near $338, `HOODX-USDT` near $119, `4STOCK-USDT`): they trade like
   spot pairs but follow stocks, and every universe in this repository selects by turnover
   without knowing the difference — include them on purpose or filter them, but do not
-  take them by accident. Second, a couple of series lag the collector (`WMTX-USDT` by six
-  days, `WLFI-USD1` hourly); everything else is current, and the daily calendar ends on
-  the newest bar available.
+  take them by accident. Second, `WMTX-USDT` lags the collector persistently (a week
+  behind on both 1h and 1d as of 2026-10-01) — worth a targeted `kcs-klines` sync, since
+  every other series is current and the daily calendar ends on the newest bar available.
 
 ## Map
 
@@ -35,7 +36,7 @@ place is, and what has already been learned the hard way.
 | `src/` | Rust collector: `kucoin/client.rs`, `storage/parquet_store.rs`, `collector.rs`, `verify.rs`, `status.rs` |
 | `tests/` | Rust tests; `live_api.rs` is `--ignored` and hits the real exchange |
 | `analysis/src/analysis/` | `data.py` `metrics.py` `engine.py` `report.py` `journal.py` `walkforward.py` `portfolio.py` `basket.py` `riskparity.py` `run_backtest.py`, `strategies/`, `tests/` |
-| `analysis/src/analysis/tests/` | 385 pytest tests (engine invariants, registry-wide strategy checks, CLI, journal, walk-forward, portfolio, basket, real-data regression) |
+| `analysis/src/analysis/tests/` | 409 pytest tests (engine invariants, registry-wide strategy checks, CLI, journal, walk-forward, portfolio, basket, real-data regression) |
 | `analysis/out/` | artifacts (CSV/JSON/SVG), gitignored |
 | `analysis/README.md` | the toolkit in detail; `journal/README.md` the journal format |
 | root `README.md` | the collector in detail (KuCoin API traps, schema, scheduling) |
@@ -45,7 +46,7 @@ place is, and what has already been learned the hard way.
 ```bash
 cargo test && cargo clippy --all-targets      # Rust
 uv sync                                       # Python env (installs the analysis member)
-uv run pytest                                 # 385 tests, ~22 s
+uv run pytest                                 # 409 tests, ~28 s
 uv run kcs-backtest --list                    # 16 registered strategies + their parameters
 uv run kcs-backtest --strategy tsmom --param lookback=720 --param rebalance=168
 uv run kcs-backtest --symbol BTC-USDT --last 1y   # only the last year, warm history
@@ -56,6 +57,7 @@ uv run kcs-backtest --journal --note "why"    # records a verifiable run in jour
 uv run kcs-journal report | verify | show --id …
 uv run kcs-walkforward --strategy sma --grid window=50,100,200 --train 3000 --test 1000
 uv run kcs-portfolio --timeframe 1d --lookback 30 --rebalance 30 --top 0.2
+uv run kcs-portfolio --timeframe 1d --lookback 30 --rebalance 30 --select sign --threshold 0
 ```
 
 ## Invariants — break these and the numbers become lies
@@ -99,6 +101,24 @@ uv run kcs-portfolio --timeframe 1d --lookback 30 --rebalance 30 --top 0.2
   monthly rebalance really does replace most of the book; on a held single
   position it was 61% phantom turnover per rebalance. Pinned by
   `test_holding_a_position_is_never_charged_for_its_own_price_move`.
+* **`run_portfolio` used to run the whole strategy one rebalance late.** The book decided
+  at rebalance `k` has to earn `closes[k] -> closes[k+1]` — that is what `engine.py` does
+  (`targets[t]` decided on bar t's close is exposed to bar t -> t+1) and what the report
+  claims ("every symbol above +0.0%"). The loop instead marked the *previous* book over
+  that period and swapped the new one in only at the end, so the decision took effect one
+  rebalance period later: seven bars on a weekly grid, thirty on a monthly one. Found by
+  replicating the loop to attribute P&L per pair: the replication matched the module to the
+  digit under the lagged convention, and the gross curve under the two conventions differs
+  by a factor — 22.76x (decided at k, earns k -> k+1) against 56.70x (as it ran) on the 7/7
+  sign book. Every portfolio number in this repository was re-measured after the fix
+  (`kcs-riskparity` was always correct — its loop documents "yesterday's decision takes
+  effect at this close, never at its own").
+* **The first rebalance's commission must not be written into `equity[0]`.** Charging the
+  entry cost as `equity[-1] -= cost` looks harmless, but on the first iteration `equity[-1]`
+  *is* `equity[0]`, which is the base the curve is normalised by (`curve = [v / base]`) — so
+  the entry commission cancelled itself out: counted in `fees_paid` and invisible in the
+  result. Carry the bill in the value the period starts from instead. Pinned by
+  `test_the_entry_commission_reaches_the_curve`.
 * **The archive grows under your feet.** `test_regression.py` pins a *window*
   (`BASELINE_FIRST..BASELINE_LAST`) rather than "whatever is on disk"; if a
   number moves, run `./target/release/kcs-klines status -s BTC-USDT` first.
@@ -332,6 +352,128 @@ Sharpe 0.38 on 1h.
   cross-section lose. Related names that are **not** cross-sectional: `tsmom-ls`/`sma-ls`
   (still time-series, just always in the market) and `tsmom-blend` (several horizons of
   the *same* asset). Dual momentum (relative pick + absolute filter) is not measured here.
+* **The quote filter is a modelling choice, not a free lunch (`--quote`, default USDT).**
+  A cross pair such as `ADA-BTC` is a *different* bet: its price is a ratio of two crypto
+  assets, the dollar move cancels out, and holding it adds a second exposure (and a second
+  currency to fund) that a rule written for dollar-priced assets never asked for. So
+  `kcs-portfolio` keeps only pairs quoted in the asked-for currencies — default **USDT**,
+  `--quote USDT,USDC` for both dollar stables, `--quote any` for everything on disk — and
+  the report says what it removed (`836 symbols quoted in USDT, 156 other pairs skipped`).
+  **But do not expect the filter to pay.** Measured on the same 7/7 sign book after the
+  timing fix: USDT-only **+1,141.23%** (CAGR 32.5%, Sharpe 0.30, −92.6%) against
+  `--quote any` **+3,339.12%** (48.4%, 0.57, −81.4%) — the full archive is *better*, and the
+  opposite reading I first published (USDT +2,953% against all-pairs +1,651%) was an artefact
+  of the one-period lag: the lagged book happened to suit the narrower universe. On the
+  monthly grid the same flip: USDT-only sign +610.85% against `--quote any` +1,782.88%, and
+  `rank --top 0.2` −45.38% against +238.47%. What the filter still does is remove the pair
+  that cannot move: `USDT-USDC` is quoted in USDC, so the USDT rule drops the single busiest
+  row of the trade census (241 trades on a stablecoin), and `--quote USDT,USDC` measures
+  within a point of `--quote USDT`. Choose the quote because of what the *strategy* is
+  (one settlement currency, one exposure per asset), not because of what it earned in this
+  archive.
+* **The sign filter is now a tool, not a script (`kcs-portfolio --select sign`).**
+  `--select rank` (default) takes the top slice as before; `--select sign --threshold 0`
+  takes *every* symbol whose trailing return beats the bar, so its breadth moves with the
+  market and an empty book means cash — the liquidation is charged, counted in the report
+  (`cash`) and warned about. `--last N` reports the newest N rebalances with warm history.
+  Run over the whole daily archive (30-bar lookback and rebalance, 0.1%/side, after the
+  timing fix), the filter beats the ranking in both universes but no longer by a landslide:
+  `--quote any` gives `sign --threshold 0` **+1,782.88%** at Sharpe 0.43 against
+  `rank --top 0.2` **+238.47%** (0.19), with the equal-weight universe at −47.39%; the
+  default USDT-only universe gives `sign` **+610.85%** (0.21) against `rank` **−45.38%**
+  (−0.07), passive −50.62%. Over the last five years the 7/7 book loses **−65.4%** (USDT) and
+  **−59.4%** (`--quote any`) with the passive book at −49.2% and −47.1%: the filter is the
+  least bad rule on a graveyard universe, not a solution to it.
+  `--chart PATH` draws it: both curves, a dashed final-multiple line each, and vertical
+  markers *only* at cash moves (green back in, red to cash, names and turnover in the
+  tooltip), and `--chart-trades PATH` gives the per-asset view: one price line per symbol on
+  the rebalance grid, a green dot at every buy and a red square at every sell (the marker
+  *is* the fill price, `BTC-USDT bought 2017-10-26 at 6010`), grey dashed for assets the rule
+  never bought, `--chart-symbols N` to cap it — a weekly rule on a 146-name book marks
+  10,763 trades in nine years, which is the picture the reader needs and also the reason the
+  cap exists. The report also prints **which pairs were traded** (how many of the universe
+  were held at least once, how many never, plus the busiest eight with rebalances held,
+  entries, exits and dates), and `--pairs-csv PATH` writes the whole census — one row per
+  symbol *watched*, never-bought ones included (`ever_traded=no`, `rebalances_held=0`). On
+  the 7/7 run over 992 pairs that census says **980 pairs were held at least once and 12
+  were never bought**: the filter is not selective about *which* pairs it trades, it is
+  selective about *when* (breadth 1 … 688), and the busiest rows are the cost story —
+  `USDT-USDC` 241 trades, `LTC-BTC` 235, `LTC-USDT` 234. `USDT-USDC` being near the top is
+  the missing-filter defect in one line: a stablecoin clears a zero bar on ±0.01% and is
+  then traded back and forth all year. Breadth is reported as a number rather than marked — on a wide universe it
+  swings 1 … 578 names and would put forty lines on a hundred rebalances.
+* **The monthly "buy what rose last month" rule, measured (2019-03 … 2026-09, monthly
+  decisions, equal weight, cash when nothing qualifies).** It is monthly *time-series*
+  momentum as a sign filter rather than a ranking, and both forms were run on the same
+  engine. All pairs, buy what rose: 6.53x at Sharpe 0.43 and −77.1% drawdown, **142 names
+  held on average, 1.39 books turned over per month, 82% of the starting capital paid in
+  commission** (~10.9%/yr), and **0.61x over the last five years** — the 6.53x is
+  2019–2021. Buying what *fell* instead returns 1.71x on the same universe, so the sign does
+  carry information; on the liquid top-20 by turnover the same filter gives 2.96x against
+  6.04x for the *ranked* version, i.e. a history filter leaves a ranking dead (412 names,
+  −82%) while a **turnover** filter revives it (20 names, +504%) — liquidity, not age, is
+  what makes a cross-section usable. The best version of the idea is on one asset: the
+  monthly sign rule on BTC made 17.65x at Sharpe **0.86** and −55.7% drawdown with 44% of
+  months in cash, better risk than holding BTC (0.64, −76.6%) at similar return. And the
+  grid is the expensive part: on BTC, over exactly that period, the same 30-day signal
+  decided **weekly** returns **32.87x at Sharpe 1.06 and −44.2%**, against 13.71x at 0.74
+  and −65.1% decided monthly.
+* **The sign filter and TSMOM read the same signal and are completely different
+  strategies.** `Tsmom.threshold` *is* the portfolio's `--threshold`: both hold while the
+  close is above its level `lookback` bars ago, on the same absolute grid, held between
+  decisions. Same 7/7 configuration, same nine years, asset vs universe: TSMOM on BTC is
+  **out of the market 46% of the time** (mean exposure 0.54), makes 114 trades, pays ~20% of
+  capital in commission, ends at **10.87x** (Sharpe 0.55, −75.0%) and **+86.7% over the last
+  five years**; the same rule on 836 USDT pairs is **almost never** out of the market (4% of
+  466 rebalances), makes ~109 names' worth of turnover every week, pays **860.6% of capital**
+  (turnover 1.30 per rebalance), ends at **12.4x** (Sharpe 0.30, −92.6%) and **−65.4% over the
+  last five years**. The signal did not change — what changed is that a 109-name book
+  neutralises the *exit*, which is the whole measured value of the rule, and each 0.9%
+  position is too small for its own signal to matter. That construction is fee-fragile:
+  0.00%/0.05%/0.10%/0.20%/0.30% per side gives +3,197%/+2,303%/+1,651%/+829%/+392% on the
+  `--quote any` book (measured before the timing fix — the *shape* of the fee sensitivity is
+  what it shows, not the levels), and a control that holds every pair with the same weekly
+  re-equalisation and **no** filter returns +350% at 0.11 turnover instead of 1.30. Apply the
+  signal per asset (one position, or a handful of liquid names); never to ~1000 pairs at
+  equal weight.
+* **Most pairs lose money; the result is a handful of winners (`--pairs-csv`, per-pair P&L).**
+  Attributing every rebalance's money to the pair that earned it (replicating the loop, which
+  matches the module to the digit) on the 7/7 USDT book: **518 of 824 pairs lost money (63%)**
+  for a total of **−100.2** units of starting capital against **+111.6** from the 306 winners —
+  the whole 12.4x is the 11-unit difference, and it is thin: the **top 10 pairs are 29% of all
+  profit, the top 50 are 69%**, and 118 pairs are chronic (held ≥50 rebalances, won fewer than
+  45% of them). Two distinct failure modes show up in the same table. (a) *The asset died while
+  we held it*: `API3-USDT` −3.65 (140 rebalances), `GAS-USDT` −3.12, `SUSHI-USDT` −2.23,
+  `NUM-USDT` −1.69 — price and held period both −70…−100%, because a long-only filter keeps
+  buying the bounces of a collapsing pair. (b) *The timing, not the asset*: `SNX-USDT` −2.25
+  while the price rose **+205% during the periods it was held**, `TLOS-USDT` +31% while held and
+  still −1.35. And the mirror image: the winners are the up-legs of pairs that mostly die —
+  `KCS-USDT` +6.51 with **+13,801%** while held, `TEL-USDT` +3.79 (+10,087%), `GALA-USDT` +3.52
+  — and **BTC-USDT itself is in the loss column (−1.56 over 252 rebalances, 55% winning
+  periods, price +1,227% while held)**: churning a rising asset weekly can lose money. Full
+  table: `analysis/out/sign_pnl_by_pair.csv`.
+* **A "best rebalancing period per pair" is noise, and it is measurable.** On 765 daily
+  pairs, running the same rule (hold while the close is above its level `lookback` bars
+  ago, re-decide every `rebalance` bars, 0.1%/side) over a 4x5 grid and then applying the
+  best of the 20 configurations from the **first half** to the **second half**: the tuned
+  pick scored **+0.58** median Sharpe in sample and **−0.36** out of sample, against
+  **−0.35** for a fixed untuned 30/7 — no gain at all. The in-sample best repeated in the
+  second half in **43 of 765 cases (6%)**, where random would be 5%. What *is* real is the
+  grid as a population property: median Sharpe by cell is best at lookback 7 / rebalance 7
+  (**−0.11**), worst at rebalance 1 (−0.33, and −0.28 even at lookback 30), and negative
+  everywhere because the median asset loses (see the universe bullet). Set the grid; do not
+  tune it per asset.
+* **A hand-rolled backtest can be wrong three ways at once — calibrate it on `engine.py`.**
+  While building the per-pair sweep above, three bugs in a row produced confident nonsense:
+  (1) the position earned the very move that produced its signal (look-ahead), which showed
+  up as a median Sharpe of **2.84** and looked *stable* — the in-sample/out-of-sample split
+  agreed 88% of the time because a biased harness is consistently biased, so out-of-sample
+  testing alone does not protect you; (2) comparing my curve from bar 250 with the engine's
+  curve from bar 0 (different windows) doubled the apparent error; (3) forgetting to pass
+  the timestamps made the grid test always true, so `rebalance` was silently ignored and all
+  five columns of the sweep came out identical. The fix each time was the same: run one rule
+  through both the harness and `kcs-backtest` and compare (7/7 on BTC: engine 9.6239x,
+  harness 9.6372x once aligned).
 * **The indicator zoo is one trade in thirty costumes.** Thirty classic indicator rules
   through one harness (signal on a close, held over the next close-to-close move, 0.1% a
   side, long or cash), then twenty of them screened over **529 daily series** with 500+

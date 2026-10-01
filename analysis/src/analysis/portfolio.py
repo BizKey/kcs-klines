@@ -36,11 +36,12 @@ from __future__ import annotations
 import argparse
 import bisect
 import json
+import math
 import statistics
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from . import Costs, data, metrics
+from . import Costs, data, metrics, report
 from .metrics import pct
 
 DEFAULT_CALENDAR = "BTC-USDT"
@@ -58,6 +59,13 @@ class Panel:
     symbol: str
     closes: list[float | None]
     momentum: list[float | None]
+    #: Health readings per rebalance date, all computed from bars up to that date:
+    #: how far below its own running peak the price sits (`below_peak`, a fraction),
+    #: how far above its own long moving average it is (`trend`), the median quote
+    #: turnover over the gate window (`turnover`) and the annualised volatility over
+    #: the same window (`volatility`). `None` where the history does not exist yet.
+    #: An empty mapping keeps a hand-built panel valid.
+    gates: dict[str, list[float | None]] = field(default_factory=dict)
 
 
 @dataclass
@@ -70,6 +78,86 @@ class Rebalance:
     shorts: list[str]
     turnover: float
     candidates: int
+
+
+@dataclass(frozen=True)
+class GateSpec:
+    """Which health conditions a symbol must pass to be a candidate.
+
+    Every reading is taken from bars at or before the rebalance date, so a gate can only
+    use the past. A zero/None threshold switches that gate off; `active` says whether any
+    of them is on.
+    """
+
+    trend_bars: int = 0              # price must be above its own mean of this many bars
+    trend_threshold: float = 0.0     # ... by at least this much (0 = merely above)
+    max_below_peak: float = 0.0      # drop names this far below their own running peak
+    min_turnover: float = 0.0        # median quote turnover per bar, gate window
+    min_volatility: float = 0.0      # annualised volatility floor (drops dead pairs)
+
+    @property
+    def active(self) -> bool:
+        return bool(
+            self.trend_bars or self.max_below_peak or self.min_turnover or self.min_volatility
+        )
+
+    def describe(self) -> str:
+        parts = []
+        if self.trend_bars:
+            parts.append(f"trend {self.trend_bars} bars >= {self.trend_threshold:+.1%}")
+        if self.max_below_peak:
+            parts.append(f"peak within -{self.max_below_peak:.0%}")
+        if self.min_turnover:
+            parts.append(f"turnover >= {self.min_turnover:,.0f}/bar")
+        if self.min_volatility:
+            parts.append(f"volatility >= {self.min_volatility:.0%}")
+        return ", ".join(parts) if parts else "none"
+
+    def names(self) -> list[str]:
+        out = []
+        if self.trend_bars:
+            out.append("trend")
+        if self.max_below_peak:
+            out.append("below_peak")
+        if self.min_turnover:
+            out.append("turnover")
+        if self.min_volatility:
+            out.append("volatility")
+        return out
+
+
+def gate_ok(panel: "Panel", k: int, gates: "GateSpec | None") -> bool:
+    """Does this symbol pass every switched-on gate at rebalance `k`?
+
+    A gate whose reading does not exist yet (a young series, a short window) counts as
+    failed: the point is to refuse to buy what cannot be checked.
+    """
+    if gates is None or not gates.active:
+        return True
+
+    def value(name: str) -> float | None:
+        series = panel.gates.get(name)
+        if not series or k >= len(series):
+            return None
+        return series[k]
+
+    if gates.trend_bars:
+        trend = value("trend")
+        if trend is None or trend < gates.trend_threshold:
+            return False
+    if gates.max_below_peak:
+        below = value("below_peak")
+        if below is None or below < -gates.max_below_peak:
+            return False
+    if gates.min_turnover:
+        turn = value("turnover")
+        if turn is None or turn < gates.min_turnover:
+            return False
+    if gates.min_volatility:
+        vol = value("volatility")
+        if vol is None or vol < gates.min_volatility:
+            return False
+    return True
 
 
 @dataclass
@@ -91,7 +179,36 @@ class PortfolioResult:
     holdings_mean: float
     fees_paid: float
     dropped: int
+    #: How the slice is chosen: `rank` takes the top of the cross-section, `sign`
+    #: takes everything clearing `threshold` — a filter, so its holdings and its
+    #: cash position move with the market.
+    select_mode: str = "rank"
+    threshold: float = 0.0
+    flat_rebalances: int = 0
+    #: The health gates the run applied and how many candidates they removed per
+    #: rebalance on average (`None` = no gates).
+    gates: "GateSpec | None" = None
+    gated_mean: float = 0.0
+    #: The quote filter the run used (`None` = every pair on disk) and how many pairs it
+    #: skipped, so the report can say what the universe actually was.
+    quotes: tuple[str, ...] | None = ("USDT",)
+    skipped_pairs: int = 0
     warnings: list[str] = field(default_factory=list)
+
+    #: Filled by the CLI so the report and the JSON can list the pairs without the
+    #: caller re-passing the panels; empty when the result was built by hand.
+    pairs: list[dict] = field(default_factory=list)
+
+    def pair_stats(self) -> list[dict]:
+        """Per-pair rows, busiest first (empty unless `pairs` was filled in)."""
+        return self.pairs
+
+    @property
+    def cash_share(self) -> float:
+        """Share of rebalances the portfolio spent in cash with nothing selected."""
+        if not self.rebalances:
+            return 0.0
+        return self.flat_rebalances / len(self.rebalances)
 
     @property
     def mean_turnover(self) -> float:
@@ -106,6 +223,16 @@ class PortfolioResult:
             "rebalance": self.rebalance,
             "top": self.top,
             "mode": self.mode,
+            "select": self.select_mode,
+            "threshold": self.threshold,
+            "cash_share": self.cash_share,
+            "gates": self.gates.describe() if self.gates else "none",
+            "gated_per_rebalance": self.gated_mean,
+            "quotes": list(self.quotes) if self.quotes else "any",
+            "skipped_pairs": self.skipped_pairs,
+            "pairs_traded": sum(1 for row in self.pairs if row["held"]),
+            "pairs_never_bought": sum(1 for row in self.pairs if not row["held"]),
+            "pairs_busiest": self.pairs[:10],
             "universe": self.universe,
             "rebalances": len(self.rebalances),
             "holdings_mean": self.holdings_mean,
@@ -175,14 +302,81 @@ def build_panel(
     dates: list[int],
     lookback_seconds: int,
     max_age: int | None = None,
+    *,
+    gate_seconds: int | None = None,
+    trend_bars: int | None = None,
+    turnover: list[float] | None = None,
 ) -> Panel:
-    """Sample one symbol's closes and lookback returns onto the rebalance calendar."""
+    """Sample one symbol's closes, lookback returns and health gates onto the calendar.
+
+    Every reading is taken from bars at or before the rebalance date, so no gate can see
+    the future: `below_peak` compares the close with the highest close so far, `trend`
+    with the mean of the previous `trend_bars` closes, and `turnover`/`volatility` with
+    the `gate_seconds` window ending at that date.
+    """
     sampled = [close_at(times, closes, date, max_age) for date in dates]
     momentum: list[float | None] = []
     for date, value in zip(dates, sampled):
         past = close_at(times, closes, date - lookback_seconds, max_age)
         momentum.append(None if value is None or past in (None, 0) else value / past - 1.0)
-    return Panel(symbol=symbol, closes=sampled, momentum=momentum)
+
+    gates: dict[str, list[float | None]] = {}
+    if trend_bars or turnover is not None or gate_seconds:
+        # Annualise volatility by the series' own bar length, not by the gate window:
+        # a 30-day standard deviation scaled to 30 days is not a volatility figure.
+        deltas = [b - a for a, b in zip(times, times[1:])]
+        step = int(statistics.median(deltas)) if deltas else 86400
+        bars_per_year = 365.0 * 86400 / step if step else 365.0
+        below_peak: list[float | None] = []
+        trend: list[float | None] = []
+        liquid: list[float | None] = []
+        vol: list[float | None] = []
+        for date, value in zip(dates, sampled):
+            index = bisect.bisect_right(times, date)
+            seen = closes[:index]
+            if value is None or index < 2:
+                below_peak.append(None)
+                trend.append(None)
+                liquid.append(None)
+                vol.append(None)
+                continue
+            peak = max(seen) if seen else value
+            below_peak.append(value / peak - 1.0 if peak > 0 else None)
+            trend.append(
+                value / (sum(seen[-trend_bars:]) / min(len(seen), trend_bars)) - 1.0
+                if trend_bars and len(seen) >= trend_bars
+                else None
+            )
+            window = [
+                moment for moment in times if date - (gate_seconds or 0) < moment <= date
+            ]
+            start = bisect.bisect_right(times, date - (gate_seconds or 0))
+            if gate_seconds and index - start >= 3:
+                turns = sorted(turnover[start:index]) if turnover else []
+                liquid.append(
+                    turns[len(turns) // 2] if turns else None
+                )
+                moves = [
+                    math.log(closes[i] / closes[i - 1])
+                    for i in range(start + 1, index)
+                    if closes[i - 1] > 0 and closes[i] > 0
+                ]
+                vol.append(
+                    statistics.pstdev(moves) * math.sqrt(bars_per_year)
+                    if len(moves) > 2
+                    else None
+                )
+            else:
+                liquid.append(None)
+                vol.append(None)
+            del window
+        gates = {
+            "below_peak": below_peak,
+            "trend": trend,
+            "turnover": liquid,
+            "volatility": vol,
+        }
+    return Panel(symbol=symbol, closes=sampled, momentum=momentum, gates=gates)
 
 
 def load_calendar(
@@ -203,31 +397,75 @@ def load_calendar(
     return times
 
 
-def read_closes(data_dir: Path | str, symbol: str, timeframe: str) -> tuple[list[int], list[float]]:
-    """Only the `time` and `close` columns of a series — the fast path for panels."""
+def read_closes(
+    data_dir: Path | str, symbol: str, timeframe: str, *, with_volume: bool = False
+) -> tuple[list[int], list[float]] | tuple[list[int], list[float], list[float]]:
+    """Only the columns a panel needs — the fast path over a thousand series.
+
+    `with_volume=True` also returns quote turnover (`close * volume`), which the
+    liquidity gate needs and a pure close panel does not.
+    """
     import pyarrow.parquet as pq
 
     files = data.series_files(data_dir, symbol, timeframe)
     if not files:
         raise FileNotFoundError(f"no parquet files for {symbol} {timeframe} under {data_dir}")
-    pairs: dict[int, float] = {}
+    wanted = ["time", "close", "volume"] if with_volume else ["time", "close"]
+    pairs: dict[int, tuple[float, float]] = {}
     for path in files:
-        table = pq.read_table(path, columns=["time", "close"])
+        table = pq.read_table(path, columns=wanted)
         columns = table.to_pydict()
-        for moment, close in zip(columns["time"], columns["close"]):
-            pairs[moment] = close
+        for index, moment in enumerate(columns["time"]):
+            close = columns["close"][index]
+            volume = columns["volume"][index] if with_volume else 0.0
+            pairs[moment] = (close, close * (volume or 0.0))
     ordered = sorted(pairs)
-    return ordered, [pairs[moment] for moment in ordered]
+    closes = [pairs[moment][0] for moment in ordered]
+    if not with_volume:
+        return ordered, closes
+    return ordered, closes, [pairs[moment][1] for moment in ordered]
 
 
-def select(momentum: dict[str, float], top: float, mode: str) -> tuple[list[str], list[str]]:
-    """The strongest and weakest slices of a momentum cross-section.
+def threshold_of(spec: str) -> float:
+    """`0` -> 0.0, `5%` -> 0.05, `-3%` -> -0.03: the trailing return a symbol must beat."""
+    text = spec.strip().rstrip("%")
+    try:
+        value = float(text)
+    except ValueError:
+        raise SystemExit(f"--threshold needs a number like 0 or 5%, got {spec!r}") from None
+    return value / 100.0 if spec.strip().endswith("%") else value
 
-    `top` is a fraction of the ranked universe when below 1, or an absolute count
-    when at least 1. Ties are broken by symbol name so a run is reproducible.
+
+SELECT_MODES = ("rank", "sign")
+
+
+def select(
+    momentum: dict[str, float],
+    top: float,
+    mode: str,
+    *,
+    select_mode: str = "rank",
+    threshold: float = 0.0,
+) -> tuple[list[str], list[str]]:
+    """Which symbols to hold: the strongest slice (`rank`) or everything above a bar (`sign`).
+
+    `rank` takes a slice of the sorted cross-section — `top` is a fraction of the
+    universe below 1, or an absolute count at 1 or more. `sign` takes *every*
+    symbol whose trailing return clears `threshold` (0 means "it rose"), which is
+    a filter rather than a ranking: it holds more names when the market is up and
+    fewer when it is down, and nothing at all when nothing qualifies. Ties are
+    broken by symbol name so a run is reproducible.
     """
     if not momentum:
         return [], []
+    if select_mode == "sign":
+        longs = sorted(s for s, value in momentum.items() if value > threshold)
+        shorts = (
+            sorted(s for s, value in momentum.items() if value < -abs(threshold))
+            if mode == "long-short"
+            else []
+        )
+        return longs, shorts
     ranked = sorted(momentum.items(), key=lambda item: (-item[1], item[0]))
     size = max(1, round(len(ranked) * top)) if top < 1 else int(top)
     size = min(size, len(ranked))
@@ -251,10 +489,17 @@ def run_portfolio(
     costs: Costs | None = None,
     label: str = "cross-sectional momentum",
     bars_per_year: float = 365.0,
+    select_mode: str = "rank",
+    gates: GateSpec | None = None,
+    quotes: tuple[str, ...] | None = ("USDT",),
+    skipped_pairs: int = 0,
+    threshold: float = 0.0,
 ) -> PortfolioResult:
     """Rank, hold, rebalance, and charge for the turnover."""
     if mode not in ("long-only", "long-short"):
         raise ValueError("mode must be 'long-only' or 'long-short'")
+    if select_mode not in SELECT_MODES:
+        raise ValueError(f"select must be one of {', '.join(SELECT_MODES)}")
     if top <= 0:
         raise ValueError("top must be positive")
     costs = costs or Costs()
@@ -270,24 +515,62 @@ def run_portfolio(
     rebalances: list[Rebalance] = []
     fees_paid = 0.0
     dropped = 0
+    flat = 0
 
     wiped_out: int | None = None
+    gated_total = 0
     for k in range(len(dates) - 1):
-        momentum = {
-            panel.symbol: value
-            for panel in panels
-            if (value := panel.momentum[k]) is not None and panel.closes[k] is not None
-        }
-        longs, shorts = select(momentum, top, mode)
-        if not longs and not shorts:
-            equity.append(equity[-1])
-            rebalances.append(Rebalance(k, dates[k], [], [], 0.0, 0))
-            continue
+        momentum = {}
+        gated_here = 0
+        for panel in panels:
+            value = panel.momentum[k]
+            if value is None or panel.closes[k] is None:
+                continue
+            if not gate_ok(panel, k, gates):
+                gated_here += 1
+                continue
+            momentum[panel.symbol] = value
+        gated_total += gated_here
+        longs, shorts = select(
+            momentum, top, mode, select_mode=select_mode, threshold=threshold
+        )
+        side = 0.5 if mode == "long-short" and shorts else 1.0
+        targets: dict[str, float] = {}
+        for symbol in longs:
+            targets[symbol] = targets.get(symbol, 0.0) + side / len(longs)
+        for symbol in shorts:
+            targets[symbol] = targets.get(symbol, 0.0) - side / len(shorts)
 
-        # Mark the book to the next rebalance before rebalancing it. The return
-        # is `sum(weight * (ratio - 1))`, not `sum(weight * ratio)`: the two agree
-        # only when the weights sum to 1, and a long/short book sums to zero with
-        # the balance sitting in cash.
+        # 1. Trade at this close, before the new book earns anything. `weights` is the
+        #    book that arrived here (drifted to this close by the previous iteration), so
+        #    the turnover below measures a trade rather than a price move. Charging the
+        #    cost against the drifted book is what keeps a merely-held position free: an
+        #    earlier version divided by growth twice and billed 61% turnover per rebalance
+        #    for a single holding that had tripled.
+        turnover = sum(
+            abs(targets.get(symbol, 0.0) - weights.get(symbol, 0.0))
+            for symbol in set(targets) | set(weights)
+        )
+        cost = equity[-1] * turnover * costs.rate
+        fees_paid += cost
+        # Carry the bill into the value the period starts from. Writing it back into
+        # `equity[-1]` instead would, on the first rebalance, subtract it from
+        # `equity[0]` — which is also the curve's normalising base — and the entry
+        # commission would silently vanish from the result.
+        value = max(equity[-1] - cost, 0.0)
+        weights = targets
+        rebalances.append(Rebalance(k, dates[k], longs, shorts, turnover, len(momentum)))
+        if not targets:
+            # Nothing qualified: the book goes to cash and pays to get there. This is
+            # the sign rule's normal state in a falling market, not an edge case.
+            flat += 1
+
+        # 2. The book decided *at* this close earns the next period, exactly as
+        #    `engine.py` does it: `targets[t]` decided on bar t's close is exposed to
+        #    bar t -> t+1. Marking the previous book over this period instead — which is
+        #    what this loop used to do — silently ran the whole strategy one rebalance
+        #    late (seven bars on a weekly grid, thirty on a monthly one), so the measured
+        #    rule was not the rule the report described.
         growth = 1.0
         drifted: dict[str, float] = {}
         for symbol, weight in weights.items():
@@ -301,32 +584,12 @@ def run_portfolio(
             ratio = end / start
             growth += weight * (ratio - 1.0)
             drifted[symbol] = weight * ratio
-        value_after = equity[-1] * growth
-        # Normalise the drifted book back to the capital it now represents, so
-        # the weights sum to it again (1 for a long-only book, 0 for long/short)
-        # and the turnover below measures a trade rather than a price move.
-        # Dividing twice here charged commission for a position that was merely
-        # held: a single holding that tripled paid 61% turnover per rebalance.
+        value_after = value * growth
+        # Normalise the drifted book back to the capital it now represents, so the
+        # weights sum to it again (1 for a long-only book, 0 for long/short) and the
+        # next rebalance's turnover measures a trade rather than a price move.
         if growth > 0 and drifted:
-            drifted = {symbol: amount / growth for symbol, amount in drifted.items()}
-
-        side = 0.5 if mode == "long-short" and shorts else 1.0
-        targets: dict[str, float] = {}
-        for symbol in longs:
-            targets[symbol] = targets.get(symbol, 0.0) + side / len(longs)
-        for symbol in shorts:
-            targets[symbol] = targets.get(symbol, 0.0) - side / len(shorts)
-
-        turnover = sum(
-            abs(targets.get(symbol, 0.0) - drifted.get(symbol, 0.0))
-            for symbol in set(targets) | set(drifted)
-        )
-        cost = value_after * turnover * costs.rate
-        fees_paid += cost
-        value_after -= cost
-
-        weights = targets
-        rebalances.append(Rebalance(k, dates[k], longs, shorts, turnover, len(momentum)))
+            weights = {s: amount / growth for s, amount in drifted.items()}
         if value_after <= 0:
             # A geared book can lose more than everything in one period: a short
             # leg on a symbol that multiplied. The portfolio is gone, so the rest
@@ -353,12 +616,19 @@ def run_portfolio(
         performance=metrics.performance(curve, per_year),
         benchmark_equity=benchmark,
         benchmark=metrics.performance(benchmark, per_year),
+        select_mode=select_mode,
+        threshold=threshold,
+        flat_rebalances=flat,
         universe=len(panels),
         holdings_mean=statistics.fmean(
             [len(r.longs) + len(r.shorts) for r in rebalances] or [0.0]
         ),
         fees_paid=fees_paid,
         dropped=dropped,
+        gates=gates,
+        gated_mean=gated_total / max(len(dates) - 1, 1),
+        quotes=quotes,
+        skipped_pairs=skipped_pairs,
         warnings=warnings,
     )
     if wiped_out is not None:
@@ -374,6 +644,11 @@ def run_portfolio(
     if len(panels) < 20:
         result.warnings.append(
             f"only {len(panels)} symbols: a cross-section needs breadth to mean anything"
+        )
+    if select_mode == "sign" and flat:
+        result.warnings.append(
+            f"nothing cleared the {threshold:+.1%} bar on {flat} of {len(rebalances)} "
+            f"rebalances ({flat / max(len(rebalances), 1):.0%} of the time in cash)"
         )
     return result
 
@@ -411,25 +686,395 @@ def equal_weight_benchmark(panels: list[Panel], dates: list[int], costs: Costs) 
     return curve
 
 
+def gross_exposure(result_side: tuple[list[str], list[str]], mode: str) -> float:
+    """How much of the account is at work: 0 in cash, 1 long-only, 0.5 per side long/short."""
+    longs, shorts = result_side
+    if not longs and not shorts:
+        return 0.0
+    return 0.5 if mode == "long-short" and shorts else 1.0
+
+
+def cash_markers(result: PortfolioResult) -> list[report.Marker]:
+    """A marker only where the book entered or left cash.
+
+    Marking every rebalance would draw a hundred lines across the chart and say
+    nothing: what a reader needs to see is when the rule stepped aside. Breadth moves
+    far too often to mark (it swings from 1 name to 578 on a wide universe), so it is
+    reported as a number instead, and only the cash moves are drawn. The count of names
+    is in the tooltip, and the colours keep the vocabulary the rest of the toolkit uses
+    — green for more capital at work, red for less.
+    """
+    markers: list[report.Marker] = []
+    previous = 0.0          # the account starts in cash, so the first entry is a move
+    for rebalance in result.rebalances:
+        exposure = gross_exposure((rebalance.longs, rebalance.shorts), result.mode)
+        if exposure != previous:
+            colour = report.MARKER_ENTRY if exposure > previous else report.MARKER_EXIT
+            what = "back in" if exposure > previous else "to cash"
+            markers.append(
+                (
+                    rebalance.index,
+                    colour,
+                    f"{data.iso(rebalance.time)} UTC — {what}: {len(rebalance.longs)} long, "
+                    f"{len(rebalance.shorts)} short of {rebalance.candidates} ranked, "
+                    f"turnover {rebalance.turnover:.2f}",
+                )
+            )
+        previous = exposure
+    return markers
+
+
+def write_chart(path: Path, result: PortfolioResult, dates: list[int]) -> None:
+    """The portfolio against the equal-weight universe, with its cash moves marked."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    portfolio_label = f"portfolio (select {result.select_mode})"
+    benchmark_label = f"equal weight, {result.universe} names"
+    report.write_curves(
+        path,
+        dates[: len(result.equity)],
+        {portfolio_label: result.equity, benchmark_label: result.benchmark_equity},
+        f"{result.label}: {result.mode}, lookback {result.lookback}, "
+        f"rebalance {result.rebalance} ({result.costs})",
+        colors={portfolio_label: "#1a73e8", benchmark_label: "#9aa0a6"},
+        markers=cash_markers(result),
+        levels={
+            portfolio_label: result.performance.final_equity,
+            benchmark_label: result.benchmark.final_equity,
+        },
+        marker_words={
+            report.MARKER_ENTRY: ("back in", "green"),
+            report.MARKER_EXIT: ("to cash", "red"),
+            report.MARKER_SAME: ("size unchanged", "grey"),
+        },
+        marker_title="cash moves",
+    )
+
+
+#: Colours cycled through the drawn assets, in the order they are picked.
+ASSET_COLORS = (
+    "#1a73e8", "#188038", "#d93025", "#f9ab00", "#9334e6", "#0b8043", "#c5221f",
+    "#3f51b5", "#00838f", "#6d4c41", "#ad1457", "#2e7d32", "#ef6c00", "#5e35b1",
+)
+#: What an asset that was never bought looks like.
+NEVER_COLOR = "#9aa0a6"
+
+
+def trade_log(result: PortfolioResult, panels: list[Panel], dates: list[int]):
+    """Every buy and sell the book made, as `(symbol, kind, index, price)`.
+
+    A symbol is bought on the rebalance that puts it in the book (the price is that
+    date's close, which is the fill this module charges commission on) and sold on the
+    rebalance that drops it. `kind` is `"buy"` or `"sell"`.
+    """
+    closes = {panel.symbol: panel.closes for panel in panels}
+    longs = [set(balance.longs) for balance in result.rebalances]
+    shorts = [set(balance.shorts) for balance in result.rebalances]
+    events: list[tuple[str, str, int, float]] = []
+    for k in range(len(longs)):
+        before_long, before_short = (longs[k - 1], shorts[k - 1]) if k else (set(), set())
+        for side, entry, exit_ in (
+            (longs[k], "buy", "sell"),
+            (shorts[k], "short", "cover"),
+        ):
+            was = before_long if side is longs[k] else before_short
+            for symbol in sorted(side - was):
+                price = closes.get(symbol, [None] * len(dates))[k]
+                if price:
+                    events.append((symbol, entry, k, float(price)))
+            for symbol in sorted(was - side):
+                price = closes.get(symbol, [None] * len(dates))[k]
+                if price:
+                    events.append((symbol, exit_, k, float(price)))
+    return events
+
+
+def pair_stats(result: PortfolioResult, panels: list[Panel], dates: list[int]) -> list[dict]:
+    """Per pair: how often the book held it, and how often it went in and out.
+
+    Every symbol of the universe gets a row, including the ones the rule never bought
+    (`held == 0`), so the list is a census of what the strategy watched rather than
+    only of what it did. `first_held`/`last_held` are the dates it was in the book.
+    """
+    by_symbol: dict[str, dict] = {
+        panel.symbol: {
+            "symbol": panel.symbol,
+            "held": 0,
+            "buys": 0,
+            "sells": 0,
+            "shorts": 0,
+            "covers": 0,
+            "first_held": "",
+            "last_held": "",
+        }
+        for panel in panels
+    }
+    for symbol, kind, index, _ in trade_log(result, panels, dates):
+        row = by_symbol.get(symbol)
+        if row is None:
+            continue
+        row[{"buy": "buys", "sell": "sells", "short": "shorts", "cover": "covers"}[kind]] += 1
+    for k, balance in enumerate(result.rebalances):
+        for symbol in set(balance.longs) | set(balance.shorts):
+            row = by_symbol.get(symbol)
+            if row is None:
+                continue
+            row["held"] += 1
+            when = data.iso(dates[k])[:10]
+            row["first_held"] = row["first_held"] or when
+            row["last_held"] = when
+    return sorted(by_symbol.values(), key=lambda row: (-row["held"], row["symbol"]))
+
+
+def write_pairs(path: Path, result: PortfolioResult, panels: list[Panel], dates: list[int]) -> None:
+    """The full per-pair census as CSV: one row per symbol the run watched."""
+    import csv as csv_module
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rows = pair_stats(result, panels, dates)
+    with path.open("w", newline="") as fh:
+        writer = csv_module.writer(fh)
+        writer.writerow(
+            ["symbol", "rebalances_held", "buys", "sells", "shorts", "covers",
+             "first_held_utc", "last_held_utc", "ever_traded"]
+        )
+        for row in rows:
+            writer.writerow(
+                [
+                    row["symbol"],
+                    row["held"],
+                    row["buys"],
+                    row["sells"],
+                    row["shorts"],
+                    row["covers"],
+                    row["first_held"],
+                    row["last_held"],
+                    "yes" if row["held"] else "no",
+                ]
+            )
+
+
+def write_trades_chart(
+    path: Path,
+    result: PortfolioResult,
+    panels: list[Panel],
+    dates: list[int],
+    *,
+    limit: int = 40,
+    never_held: int = 8,
+) -> None:
+    """One price line per asset, with the prices it was bought and sold at.
+
+    Every line is that symbol's close on the rebalance grid, so the marked points *are*
+    the fill prices this module charged commission on: a green dot where the book bought
+    it, a red square where it sold. Assets the rule never bought are drawn as a grey
+    dashed line, which is the honest picture of a filter — most of the universe is
+    watched and never held. The chart is capped (``limit`` lines plus ``never_held``
+    grey ones) because a thousand assets on one plot is a grey rectangle, not a chart:
+    the drawn assets are the ones the book held for the most rebalances.
+    """
+    # The book the chart draws: how many rebalances each symbol was held for.
+    holds = [set(b.longs) | set(b.shorts) for b in result.rebalances]
+    counts: dict[str, int] = {}
+    for held in holds:
+        for symbol in held:
+            counts[symbol] = counts.get(symbol, 0) + 1
+    watched = [panel for panel in panels if panel.symbol not in counts]
+    # Never-bought assets are the minority of the drawing: a fifth of the budget, so a
+    # small cap still shows the book rather than a wall of grey.
+    grey = max(1, min(never_held, limit // 5)) if watched else 0
+    drawn = sorted(counts, key=lambda s: (-counts[s], s))[: max(limit - grey, 1)]
+    never = sorted(
+        watched,
+        key=lambda p: (-sum(1 for value in p.closes if value is not None), p.symbol),
+    )[:grey]
+    chosen = [panel for panel in panels if panel.symbol in set(drawn)]
+    chosen += never
+    if not chosen:
+        raise ValueError("no assets to draw: the universe is empty")
+
+    events = trade_log(result, panels, dates)
+    prices = [value for panel in chosen for value in panel.closes if value]
+    if not prices:
+        raise ValueError("no prices to draw")
+    lo = math.floor(math.log10(min(prices)) * 4) / 4
+    hi = math.ceil(math.log10(max(prices)) * 4) / 4
+    span = (hi - lo) or 1.0
+    n = len(dates)
+    pad_l, pad_r, pad_t, pad_b = 70, 96, 40, 40
+    width, height = report.WIDTH, report.HEIGHT + 60
+
+    def x(index: int) -> float:
+        return pad_l + (width - pad_l - pad_r) * index / (n - 1) if n > 1 else pad_l
+
+    def y(price: float) -> float:
+        return pad_t + (height - pad_t - pad_b) * (1 - (math.log10(price) - lo) / span)
+
+    grid = []
+    for decade in range(int(math.floor(lo)), int(math.ceil(hi)) + 1):
+        for mult in (1, 2, 5):
+            value = mult * 10.0**decade
+            if not 10.0**lo * 0.999 <= value <= 10.0**hi * 1.001:
+                continue
+            grid.append(
+                f'<line x1="{pad_l}" y1="{y(value):.2f}" x2="{width - pad_r}" y2="{y(value):.2f}" '
+                f'stroke="#ececec" stroke-width="1"/>'
+                f'<text x="{pad_l - 10}" y="{y(value) + 4:.2f}" font-size="10" fill="#666" '
+                f'text-anchor="end">{value:g}</text>'
+            )
+    axis = "".join(
+        f'<text x="{x(round((n - 1) * k / 5)):.2f}" y="{height - pad_b + 20}" font-size="11" '
+        f'fill="#666" text-anchor="middle">{data.day(dates[round((n - 1) * k / 5)])}</text>'
+        for k in range(6)
+    )
+
+    lines: list[str] = []
+    labels: list[tuple[float, str, str]] = []
+    for position, panel in enumerate(chosen):
+        held = panel.symbol in counts
+        colour = ASSET_COLORS[position % len(ASSET_COLORS)] if held else NEVER_COLOR
+        style = "" if held else ' stroke-dasharray="4 3" stroke-opacity="0.45"'
+        segments: list[list[tuple[float, float]]] = [[]]
+        for index, price in enumerate(panel.closes):
+            if not price:
+                if segments[-1]:
+                    segments.append([])
+                continue
+            segments[-1].append((x(index), y(float(price))))
+        body = ""
+        for points in segments:
+            if len(points) < 2:
+                continue
+            body += (
+                f'<polyline fill="none" stroke="{colour}" stroke-width="1.2"{style} '
+                f'points="{" ".join(f"{px:.2f},{py:.2f}" for px, py in points)}"/>'
+            )
+        if not body:
+            continue
+        periods = counts.get(panel.symbol, 0)
+        lines.append(
+            f'<g class="asset"><title>{_xml(panel.symbol)} — held for {periods} of '
+            f'{len(holds)} rebalances</title>{body}</g>'
+        )
+        last = next((i for i in range(n - 1, -1, -1) if panel.closes[i]), None)
+        if last is not None:
+            labels.append((y(float(panel.closes[last])), colour, panel.symbol))
+
+    markers: list[str] = []
+    buys = sells = 0
+    drawn_set = {panel.symbol for panel in chosen}
+    for symbol, kind, index, price in events:
+        if symbol not in drawn_set or not dates:
+            continue
+        cx, cy = x(index), y(price)
+        when = data.iso(dates[index])[:10]
+        if kind in ("buy", "short"):
+            buys += 1
+            word = "bought" if kind == "buy" else "shorted"
+            markers.append(
+                f'<g class="trade"><title>{_xml(symbol)} {word} {when} at {price:g}</title>'
+                f'<circle cx="{cx:.2f}" cy="{cy:.2f}" r="3.2" fill="{report.MARKER_ENTRY}" '
+                f'fill-opacity="0.9"/></g>'
+            )
+        else:
+            sells += 1
+            word = "sold" if kind == "sell" else "covered"
+            markers.append(
+                f'<g class="trade"><title>{_xml(symbol)} {word} {when} at {price:g}</title>'
+                f'<rect x="{cx - 3:.2f}" y="{cy - 3:.2f}" width="6" height="6" fill="none" '
+                f'stroke="{report.MARKER_EXIT}" stroke-width="1.6" fill-opacity="0"/></g>'
+            )
+
+    # Label each line at its right-hand end, skipping the ones that would collide.
+    placed: list[float] = []
+    text_labels = []
+    for label_y, colour, symbol in sorted(labels, key=lambda item: item[0]):
+        if any(abs(label_y - other) < 10 for other in placed):
+            continue
+        placed.append(label_y)
+        text_labels.append(
+            f'<text x="{width - pad_r + 4}" y="{label_y + 3:.2f}" font-size="9" '
+            f'fill="{colour}" font-family="sans-serif">{_xml(symbol)}</text>'
+        )
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    title = (
+        f"{result.label}: every asset's close on the rebalance grid, entries and exits "
+        f"({len(chosen)} of {len(panels)} drawn)"
+    )
+    footer = (
+        f"bought = green dots ({buys}), sold = red squares ({sells}); "
+        f"grey dashed = never bought ({len(never)} shown)"
+    )
+    path.write_text(
+        f"""<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" """
+        f"""viewBox="0 0 {width} {height}">
+<rect width="{width}" height="{height}" fill="#ffffff"/>
+<text x="{pad_l}" y="24" font-size="14" font-family="sans-serif" fill="#111">{_xml(title)}</text>
+{''.join(grid)}{axis}
+{''.join(lines)}
+{''.join(markers)}
+{''.join(text_labels)}
+<text x="{pad_l}" y="{height - 8}" font-size="11" font-family="sans-serif" fill="#666">{_xml(footer)}</text>
+</svg>
+"""
+    )
+
+
+def _xml(text: str) -> str:
+    """`&` in a symbol must not break the SVG."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
 def render(result: PortfolioResult, dates: list[int]) -> str:
     """Console report: what was held, what it cost, and how it compares."""
     lines: list[str] = []
     add = lines.append
     add("=" * 78)
-    add(f"{result.label} — {result.mode}, {result.costs}")
+    rule = f"{result.mode}, select {result.select_mode}"
+    add(f"{result.label} — {rule}, {result.costs}")
     add("=" * 78)
+    quoted = (
+        f"quoted in {'/'.join(result.quotes)}"
+        if result.quotes
+        else "any quote currency"
+    )
+    skipped = (
+        f", {result.skipped_pairs} other pairs skipped" if result.skipped_pairs else ""
+    )
     add(
-        f"universe    : {result.universe} symbols, {len(result.rebalances)} rebalances, "
-        f"~{result.holdings_mean:.0f} positions each"
+        f"universe    : {result.universe} symbols {quoted}{skipped}, "
+        f"{len(result.rebalances)} rebalances, ~{result.holdings_mean:.0f} positions each"
+    )
+    if result.gates is not None and result.gates.active:
+        add(
+            f"gates       : {result.gates.describe()} — dropped ~{result.gated_mean:.0f} "
+            "candidate(s) per rebalance"
+        )
+    selection = (
+        f"every symbol above {result.threshold:+.1%}"
+        if result.select_mode == "sign"
+        else f"top {result.top:g} of the ranking"
     )
     add(
         f"settings    : lookback {result.lookback} bars, rebalance every {result.rebalance} bars, "
-        f"top {result.top:g}"
+        f"{selection}"
     )
     add(
         f"turnover    : {result.mean_turnover:.2f} per rebalance, fees paid {pct(result.fees_paid)} "
         "of starting capital"
     )
+    if result.select_mode == "sign":
+        breadth = sorted(len(r.longs) + len(r.shorts) for r in result.rebalances)
+        add(
+            f"cash        : nothing cleared the bar on {result.flat_rebalances} of "
+            f"{len(result.rebalances)} rebalances ({result.cash_share:.0%} of the time), "
+            f"~{result.holdings_mean:.1f} positions when it is invested"
+        )
+        if breadth:
+            add(
+                f"breadth     : {breadth[0]} … {breadth[len(breadth) // 2]} … {breadth[-1]} "
+                "names (min / median / max) — the filter breathes with the market"
+            )
     if result.rebalances:
         last = result.rebalances[-1]
         add("")
@@ -437,6 +1082,26 @@ def render(result: PortfolioResult, dates: list[int]) -> str:
         add(f"  long : {', '.join(last.longs[:12])}{'…' if len(last.longs) > 12 else ''}")
         if last.shorts:
             add(f"  short: {', '.join(last.shorts[:12])}{'…' if len(last.shorts) > 12 else ''}")
+    if result.rebalances:
+        rows = []
+        for balance in result.rebalances:
+            rows.extend(balance.longs)
+            rows.extend(balance.shorts)
+        traded = len(set(rows))
+        never = result.universe - traded
+        add(
+            f"traded pairs: {traded} of {result.universe} were held at least once, "
+            f"{never} {'was' if never == 1 else 'were'} never bought"
+        )
+        stats = result.pair_stats()
+        add(f"  {'name':<14}{'rebalances':>11}{'in':>5}{'out':>5}  {'first held':<12}{'last held':<12}")
+        for row in stats[:8]:
+            add(
+                f"  {row['symbol']:<14}{row['held']:>11}{row['buys'] + row['shorts']:>5}"
+                f"{row['sells'] + row['covers']:>5}  {row['first_held']:<12}{row['last_held']:<12}"
+            )
+        if len(stats) > 8:
+            add(f"  … and {len(stats) - 8} more rows (see --pairs-csv for all of them)")
     add("")
     add(f"{'metric':<26}{'portfolio':>18}{'equal weight':>18}")
     add("-" * 62)
@@ -472,27 +1137,134 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--timeframe", default="1d")
     parser.add_argument("--lookback", type=int, default=30, help="ranking window, in bars")
     parser.add_argument("--rebalance", type=int, default=30, help="bars between rebalances")
-    parser.add_argument("--top", type=float, default=0.2, help="fraction (<1) or count (>=1) per side")
+    parser.add_argument("--top", type=float, default=0.2, help="fraction (<1) or count (>=1) per side (--select rank)")
+    parser.add_argument(
+        "--select",
+        default="rank",
+        choices=SELECT_MODES,
+        help="`rank` takes the top slice, `sign` takes every symbol above --threshold (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--threshold",
+        default="0",
+        help="with --select sign: the trailing return a symbol must beat, e.g. 0 or 5%% (default: %(default)s)",
+    )
     parser.add_argument("--mode", default="long-only", choices=("long-only", "long-short"))
     parser.add_argument("--fee", type=float, default=0.001)
     parser.add_argument("--slippage", type=float, default=0.0)
+    parser.add_argument(
+        "--last",
+        type=int,
+        default=None,
+        metavar="N",
+        help="report only the last N rebalances (warm-up still uses the history before them)",
+    )
     parser.add_argument("--min-bars", type=int, default=0, help="skip symbols shorter than this")
     parser.add_argument("--limit", type=int, default=None, help="use only the first N symbols")
+    parser.add_argument(
+        "--quote",
+        default="USDT",
+        help="keep only pairs quoted in these currencies, comma-separated "
+        "(default: %(default)s); use 'any' for every pair on disk",
+    )
     parser.add_argument("--calendar", default=DEFAULT_CALENDAR, help="symbol whose bars define the schedule")
     parser.add_argument("--data-dir", type=Path, default=data.DEFAULT_DATA_DIR)
     parser.add_argument("--json", type=Path, default=None)
+    parser.add_argument(
+        "--chart",
+        type=Path,
+        default=None,
+        help="write the portfolio against its benchmark as an SVG chart here",
+    )
+    parser.add_argument(
+        "--chart-trades",
+        type=Path,
+        default=None,
+        help="write a second SVG: every asset's price with the prices it was bought and sold at",
+    )
+    parser.add_argument("--trend-gate", type=int, default=0,
+                        help="require the close above its own mean of N bars (0 = off)")
+    parser.add_argument("--trend-threshold", default="0%",
+                        help="how far above that mean, e.g. 5%% (default: %(default)s)")
+    parser.add_argument("--max-below-peak", default="0%",
+                        help="drop names more than this far below their own running peak "
+                             "(e.g. 90%%, 0%% = off)")
+    parser.add_argument("--min-turnover", type=float, default=0.0,
+                        help="median quote turnover per bar a name must trade (0 = off)")
+    parser.add_argument("--min-volatility", default="0%",
+                        help="annualised volatility floor, e.g. 10%% (0%% = off)")
+    parser.add_argument("--gate-window", type=int, default=None,
+                        help="bars used for the turnover/volatility gates (default: --lookback)")
+    parser.add_argument(
+        "--pairs-csv",
+        type=Path,
+        default=None,
+        help="write one row per symbol the run watched: rebalances held, buys, sells, dates",
+    )
+    parser.add_argument(
+        "--chart-symbols",
+        type=int,
+        default=40,
+        help="how many assets the trades chart draws, most-held first (default: %(default)s)",
+    )
     return parser.parse_args(argv)
 
 
-def universes(data_dir: Path | str, timeframe: str, *, limit: int | None = None) -> list[str]:
-    """Every symbol that has a series of this timeframe, alphabetically."""
+#: The quote currency of a pair is everything after the last dash.
+ANY_QUOTE = ("any", "all", "*")
+
+
+def parse_quotes(spec: str) -> tuple[str, ...] | None:
+    """`USDT`, `USDT,BTC` or `any` (which means "do not filter").
+
+    Returns the quote currencies in upper case, or `None` for every pair on disk.
+    """
+    text = (spec or "").strip()
+    if not text or text.lower() in ANY_QUOTE:
+        return None
+    quotes = tuple(part.strip().upper() for part in text.split(",") if part.strip())
+    if not quotes:
+        raise ValueError(f"no quote currency in {spec!r}; use e.g. USDT or any")
+    return quotes
+
+
+def quote_of(symbol: str) -> str:
+    """The quote currency of `BASE-QUOTE`, whatever else the symbol contains."""
+    _, _, quote = symbol.rpartition("-")
+    return quote
+
+
+def universes(
+    data_dir: Path | str,
+    timeframe: str,
+    *,
+    limit: int | None = None,
+    quotes: tuple[str, ...] | None = ("USDT",),
+) -> list[str]:
+    """Every symbol that has a series of this timeframe, alphabetically.
+
+    `quotes` keeps only pairs quoted in those currencies — the default is USDT only,
+    because a cross pair like `ADA-BTC` is a different bet: its price is a ratio of two
+    crypto assets, so the US dollar move cancels out and the book silently takes a
+    second exposure it did not ask for. `None` (CLI: `--quote any`) keeps everything.
+    """
     pairs = sorted(symbol for symbol, tf in data.available_series(data_dir) if tf == timeframe)
+    if quotes is not None:
+        wanted = set(quotes)
+        pairs = [symbol for symbol in pairs if quote_of(symbol) in wanted]
     return pairs[:limit] if limit else pairs
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    symbols = universes(args.data_dir, args.timeframe, limit=args.limit)
+    try:
+        quotes = parse_quotes(args.quote)
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
+    every = universes(args.data_dir, args.timeframe, quotes=None)
+    symbols = universes(args.data_dir, args.timeframe, limit=args.limit, quotes=quotes)
+    skipped = len(every) - len(symbols if args.limit is None else
+                              universes(args.data_dir, args.timeframe, quotes=quotes))
     if len(symbols) < 2:
         raise SystemExit(f"not enough series for {args.timeframe} under {args.data_dir}")
 
@@ -502,24 +1274,60 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit(
             f"{args.rebalance}-bar rebalancing leaves {len(dates)} dates; use a shorter interval"
         )
+    if args.last is not None:
+        if args.last < 3:
+            raise SystemExit("--last needs at least 3 rebalances to measure anything")
+        if args.last >= len(dates):
+            raise SystemExit(
+                f"--last {args.last} but the archive only holds {len(dates)} rebalances "
+                f"at {args.rebalance} bars"
+            )
+        dates = dates[-args.last:]
     step = int(statistics.median([b - a for a, b in zip(calendar_times, calendar_times[1:])]))
     lookback_seconds = args.lookback * step
     # A symbol that has not printed for five bars is treated as delisted.
     max_age = 5 * step
 
+    try:
+        gates = GateSpec(
+            trend_bars=args.trend_gate,
+            trend_threshold=threshold_of(args.trend_threshold) if args.trend_gate else 0.0,
+            max_below_peak=abs(threshold_of(args.max_below_peak)),
+            min_turnover=args.min_turnover,
+            min_volatility=abs(threshold_of(args.min_volatility)),
+        )
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
+    gate_seconds = (args.gate_window or args.lookback) * step
+
     panels: list[Panel] = []
     for symbol in symbols:
         try:
-            times, closes = read_closes(args.data_dir, symbol, args.timeframe)
+            times, closes, turnover = read_closes(
+                args.data_dir, symbol, args.timeframe, with_volume=gates.active
+            ) if gates.active else (*read_closes(args.data_dir, symbol, args.timeframe), None)
         except FileNotFoundError:
             continue
         if len(times) < args.min_bars:
             continue
-        panel = build_panel(times, closes, symbol, dates, lookback_seconds, max_age)
+        panel = build_panel(
+            times, closes, symbol, dates, lookback_seconds, max_age,
+            gate_seconds=gate_seconds if gates.active else None,
+            trend_bars=gates.trend_bars or None,
+            turnover=turnover if gates.active else None,
+        )
         if any(value is not None for value in panel.momentum):
             panels.append(panel)
     print(f"loaded {len(panels)} symbols on {len(dates)} rebalance dates ({args.timeframe})")
 
+    threshold = threshold_of(args.threshold)
+    if args.select == "sign" and args.top != 0.2:
+        print("note: --top is ignored with --select sign; the threshold decides who is held")
+    label = (
+        f"{args.timeframe} sign filter"
+        if args.select == "sign"
+        else f"{args.timeframe} cross-sectional momentum"
+    )
     result = run_portfolio(
         panels,
         dates,
@@ -528,10 +1336,25 @@ def main(argv: list[str] | None = None) -> int:
         top=args.top,
         mode=args.mode,
         costs=Costs(fee_per_side=args.fee, slippage_per_side=args.slippage),
-        label=f"{args.timeframe} cross-sectional momentum",
+        label=label,
         bars_per_year=data.bars_per_year(args.timeframe),
+        select_mode=args.select,
+        threshold=threshold,
+        gates=gates,
+        quotes=quotes,
+        skipped_pairs=skipped,
     )
+    result.pairs = pair_stats(result, panels, dates)
     print(render(result, dates))
+    if args.pairs_csv:
+        write_pairs(args.pairs_csv, result, panels, dates)
+        print(f"\nwrote {args.pairs_csv}")
+    if args.chart:
+        write_chart(args.chart, result, dates)
+        print(f"\nwrote {args.chart}")
+    if args.chart_trades:
+        write_trades_chart(args.chart_trades, result, panels, dates, limit=args.chart_symbols)
+        print(f"wrote {args.chart_trades}")
     if args.json:
         args.json.parent.mkdir(parents=True, exist_ok=True)
         args.json.write_text(json.dumps(result.as_dict(), indent=2, default=str))

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import csv as csv_module
+import json
+import statistics as st
 from pathlib import Path
 
 import pytest
@@ -214,10 +217,11 @@ def test_holding_a_position_is_never_charged_for_its_own_price_move():
     assert result.rebalances[0].turnover == pytest.approx(1.0)
     assert all(r.turnover == pytest.approx(0.0) for r in result.rebalances[1:])
     assert result.fees_paid == pytest.approx(0.001)
-    # With no further trading the curve is the symbol's own price path, entered
-    # one rebalance after the signal that chose it and paying one side to get in.
+    # With no further trading the curve is the symbol's own price path, entered at the
+    # first rebalance's close — the earliest price the rule can be filled at, since its
+    # signal exists from that close — and paying one side to get in.
     assert result.performance.total_return == pytest.approx(
-        (panel.closes[-1] / panel.closes[1]) * (1.0 - 0.001) - 1.0
+        (panel.closes[-1] / panel.closes[0]) * (1.0 - 0.001) - 1.0
     )
 
 
@@ -296,9 +300,14 @@ def test_the_report_mentions_the_settings_and_the_last_holdings():
 
 @pytest.fixture
 def universe_archive(tmp_path: Path) -> Path:
-    """A tiny daily archive: three symbols with different trends."""
+    """A tiny daily archive: USDT pairs with different trends, plus one cross pair."""
     root = tmp_path / "spot"
-    for symbol, drift in (("UP-USDT", 0.01), ("MID-USDT", 0.002), ("DOWN-USDT", -0.008)):
+    for symbol, drift in (
+        ("UP-USDT", 0.01),
+        ("MID-USDT", 0.002),
+        ("DOWN-USDT", -0.008),
+        ("UP-BTC", 0.004),          # a cross pair: filtered out unless --quote allows it
+    ):
         closes = [100.0]
         for _ in range(400):
             closes.append(closes[-1] * (1.0 + drift))
@@ -366,3 +375,412 @@ def test_universes_lists_symbols_of_one_timeframe(universe_archive: Path):
     assert symbols == ["DOWN-USDT", "MID-USDT", "UP-USDT"]
     assert portfolio.universes(universe_archive, "1d", limit=2) == ["DOWN-USDT", "MID-USDT"]
     assert portfolio.universes(universe_archive, "1h") == []
+
+
+# --- the sign filter ----------------------------------------------------------
+
+
+def test_sign_takes_every_symbol_above_the_bar_not_a_slice():
+    momentum = {"A": 0.10, "B": 0.02, "C": -0.01, "D": -0.30}
+    longs, shorts = portfolio.select(momentum, top=0.2, mode="long-only", select_mode="sign")
+    assert longs == ["A", "B"]                       # two of four, not "the top 20%"
+    assert shorts == []
+    longs, shorts = portfolio.select(momentum, top=0.2, mode="long-short", select_mode="sign")
+    assert longs == ["A", "B"]
+    assert shorts == ["C", "D"]                      # everything strictly below zero
+    longs, _ = portfolio.select(momentum, top=0.2, mode="long-only", select_mode="sign", threshold=0.05)
+    assert longs == ["A"]
+    longs, _ = portfolio.select(momentum, top=0.2, mode="long-only", select_mode="sign", threshold=0.5)
+    assert longs == []
+    longs, _ = portfolio.select(momentum, top=0.2, mode="long-only")   # ranking is untouched
+    assert longs == ["A"]
+
+
+def falling_panels():
+    """Two symbols that only ever fall: nothing can clear a zero bar."""
+    dates = daily_dates()
+    return [
+        portfolio.build_panel(*series([-0.02] * 500), "DOWN1-USDT", dates, 30 * STEP),
+        portfolio.build_panel(*series([-0.01] * 500), "DOWN2-USDT", dates, 30 * STEP),
+    ], dates
+
+
+def rise_then_fall_panels():
+    """One symbol that climbs for 300 bars and then slides: in, then out, then cash."""
+    dates = daily_dates(count=16, first_day=60)
+    returns = [0.03] * 300 + [-0.03] * 200
+    return [portfolio.build_panel(*series(returns), "ROUND-USDT", dates, 30 * STEP)], dates
+
+
+def test_a_sign_book_holds_nothing_when_nothing_rose():
+    """The point of a filter: a falling cross-section means cash, not the least-bad names."""
+    panels, dates = falling_panels()
+    result = portfolio.run_portfolio(
+        panels, dates, lookback=30, rebalance=30, mode="long-only",
+        select_mode="sign", costs=Costs(0), label="falling",
+    )
+    assert result.flat_rebalances == len(result.rebalances)
+    assert result.cash_share == pytest.approx(1.0)
+    assert result.performance.final_equity == pytest.approx(1.0)
+    assert any("nothing cleared the" in w for w in result.warnings)
+    assert result.holdings_mean == 0.0
+
+
+def test_a_sign_book_trades_in_and_out_and_pays_for_both():
+    panels, dates = rise_then_fall_panels()
+    free = portfolio.run_portfolio(
+        panels, dates, lookback=30, rebalance=30, mode="long-only",
+        select_mode="sign", costs=Costs(0), label="round",
+    )
+    paid = portfolio.run_portfolio(
+        panels, dates, lookback=30, rebalance=30, mode="long-only",
+        select_mode="sign", costs=Costs(fee_per_side=0.01), label="round",
+    )
+    assert 0 < free.flat_rebalances < len(free.rebalances)   # it went to cash partway
+    assert paid.fees_paid > 0
+    assert paid.performance.final_equity < free.performance.final_equity
+
+
+def test_the_sign_mode_decides_only_on_the_past():
+    """Adding later rebalance dates must not change an earlier decision."""
+    panels, dates = rise_then_fall_panels()
+    full = portfolio.run_portfolio(
+        panels, dates, lookback=30, rebalance=30, mode="long-only",
+        select_mode="sign", costs=Costs(0), label="full",
+    )
+    cut = 8
+    short_panels = [
+        portfolio.build_panel(
+            *series([0.03] * 300 + [-0.03] * 200), panel.symbol, dates[:cut], 30 * STEP
+        )
+        for panel in panels
+    ]
+    short = portfolio.run_portfolio(
+        short_panels, dates[:cut], lookback=30, rebalance=30, mode="long-only",
+        select_mode="sign", costs=Costs(0), label="short",
+    )
+    # `short` has one fewer rebalance than it has dates, so compare the overlap
+    overlap = len(short.rebalances)
+    assert [r.longs for r in short.rebalances] == [
+        r.longs for r in full.rebalances[:overlap]
+    ]
+
+
+def test_bad_selection_settings_are_rejected():
+    panels, dates = panel_fixture()
+    with pytest.raises(ValueError, match="select must be one of"):
+        portfolio.run_portfolio(panels, dates, lookback=30, rebalance=30, select_mode="magic")
+    assert portfolio.threshold_of("0") == 0.0
+    assert portfolio.threshold_of("5%") == pytest.approx(0.05)
+    assert portfolio.threshold_of("-3%") == pytest.approx(-0.03)
+    assert portfolio.threshold_of("0.05") == pytest.approx(0.05)
+    with pytest.raises(SystemExit, match="needs a number"):
+        portfolio.threshold_of("пять процентов")
+
+
+def test_cli_runs_the_sign_filter_and_names_it(universe_archive: Path, tmp_path: Path, capsys):
+    out = tmp_path / "sign.json"
+    code = portfolio.main([
+        "--data-dir", str(universe_archive), "--timeframe", "1d",
+        "--lookback", "30", "--rebalance", "30", "--calendar", "MID-USDT",
+        "--select", "sign", "--threshold", "0", "--json", str(out),
+    ])
+    printed = capsys.readouterr().out
+    assert code == 0
+    assert "sign filter" in printed
+    assert "every symbol above" in printed and "cash" in printed
+    payload = json.loads(out.read_text())
+    assert payload["select"] == "sign"
+    assert "cash_share" in payload
+
+
+def test_cli_reports_a_window_of_rebalances(universe_archive: Path, capsys):
+    assert portfolio.main([
+        "--data-dir", str(universe_archive), "--timeframe", "1d",
+        "--lookback", "30", "--rebalance", "30", "--calendar", "MID-USDT",
+        "--last", "3",
+    ]) == 0
+    assert "2 rebalances" in capsys.readouterr().out
+    with pytest.raises(SystemExit, match="at least 3 rebalances"):
+        portfolio.main([
+            "--data-dir", str(universe_archive), "--timeframe", "1d",
+            "--rebalance", "30", "--calendar", "MID-USDT", "--last", "2",
+        ])
+
+
+# --- the chart ----------------------------------------------------------------
+
+
+def test_the_chart_marks_the_moves_into_and_out_of_cash():
+    panels, dates = rise_then_fall_panels()
+    result = portfolio.run_portfolio(
+        panels, dates, lookback=30, rebalance=30, mode="long-only",
+        select_mode="sign", costs=Costs(0), label="round",
+    )
+    markers = portfolio.cash_markers(result)
+    assert markers, "the round trip must be marked"
+    assert [colour for _, colour, _ in markers] == [portfolio.report.MARKER_ENTRY,
+                                                    portfolio.report.MARKER_EXIT]
+    assert "back in" in markers[0][2] and "to cash" in markers[1][2]
+    # a ranking book enters once and never leaves: one marker, no exit
+    ranked = portfolio.run_portfolio(
+        panels, dates, lookback=30, rebalance=30, mode="long-only",
+        select_mode="rank", top=1.0, costs=Costs(0), label="rank",
+    )
+    assert [colour for _, colour, _ in portfolio.cash_markers(ranked)] == [
+        portfolio.report.MARKER_ENTRY
+    ]
+
+
+def test_the_chart_is_written_with_both_curves(tmp_path: Path):
+    panels, dates = rise_then_fall_panels()
+    result = portfolio.run_portfolio(
+        panels, dates, lookback=30, rebalance=30, mode="long-only",
+        select_mode="sign", costs=Costs(0), label="round",
+    )
+    path = tmp_path / "portfolio.svg"
+    portfolio.write_chart(path, result, dates)
+    text = path.read_text()
+    assert "portfolio (select sign)" in text
+    assert "equal weight, 1 names" in text
+    assert "ends at" in text and "cash moves" in text
+    assert text.count("<polyline") == 2
+
+
+def test_cli_writes_the_chart(universe_archive: Path, tmp_path: Path, capsys):
+    path = tmp_path / "chart.svg"
+    assert portfolio.main([
+        "--data-dir", str(universe_archive), "--timeframe", "1d",
+        "--lookback", "30", "--rebalance", "30", "--calendar", "MID-USDT",
+        "--select", "sign", "--chart", str(path),
+    ]) == 0
+    printed = capsys.readouterr().out
+    assert f"wrote {path}" in printed
+    assert path.exists() and path.read_text().startswith("<svg")
+    assert "breadth" in printed
+
+
+# --- the per-asset trades chart -----------------------------------------------
+
+
+def test_the_trades_chart_marks_each_buy_and_sell_at_its_fill_price():
+    panels, dates = rise_then_fall_panels()
+    result = portfolio.run_portfolio(
+        panels, dates, lookback=30, rebalance=30, mode="long-only",
+        select_mode="sign", costs=Costs(0), label="round",
+    )
+    events = portfolio.trade_log(result, panels, dates)
+    kinds = [kind for _, kind, _, _ in events]
+    assert kinds[0] == "buy" and "sell" in kinds
+    # the fill price is the close of the bar the rebalance happened on
+    for symbol, kind, index, price in events:
+        panel = next(p for p in panels if p.symbol == symbol)
+        assert price == pytest.approx(panel.closes[index])
+
+
+def test_the_trades_chart_draws_held_assets_and_greys_the_rest(tmp_path: Path):
+    panels, dates = rise_then_fall_panels()
+    panels.append(portfolio.build_panel(*series([-0.02] * 500), "NEVER-USDT", dates, 30 * STEP))
+    result = portfolio.run_portfolio(
+        panels, dates, lookback=30, rebalance=30, mode="long-only",
+        select_mode="sign", costs=Costs(0), label="round",
+    )
+    path = tmp_path / "trades.svg"
+    portfolio.write_trades_chart(path, result, panels, dates)
+    text = path.read_text()
+    assert "ROUND-USDT" in text and "NEVER-USDT" in text
+    assert 'stroke-dasharray="4 3"' in text            # the never-bought line is dashed
+    assert "grey dashed = never bought (1 shown)" in text
+    assert "bought" in text and "sold" in text
+    assert text.count("<polyline") == 2
+
+
+def test_the_trades_chart_respects_its_cap(tmp_path: Path):
+    panels = [
+        portfolio.build_panel(*series([0.01] * 500), f"A{i}-USDT", daily_dates(), 30 * STEP)
+        for i in range(12)
+    ]
+    dates = daily_dates()
+    result = portfolio.run_portfolio(
+        panels, dates, lookback=30, rebalance=30, mode="long-only",
+        select_mode="sign", costs=Costs(0), label="many",
+    )
+    path = tmp_path / "capped.svg"
+    portfolio.write_trades_chart(path, result, panels, dates, limit=4, never_held=1)
+    assert path.read_text().count("<polyline") <= 4
+
+
+def test_a_short_leg_is_marked_as_a_short_not_a_buy():
+    """Gentle moves on purpose: a fast faller that then rallies wipes a short book out."""
+    dates = daily_dates(count=12, first_day=60)
+    panels = [
+        portfolio.build_panel(
+            *series([-0.004] * 300 + [0.004] * 200), "DOWN-USDT", dates, 30 * STEP
+        )
+    ]
+    result = portfolio.run_portfolio(
+        panels, dates, lookback=30, rebalance=30, mode="long-short",
+        select_mode="sign", costs=Costs(0), label="ls",
+    )
+    kinds = [kind for _, kind, _, _ in portfolio.trade_log(result, panels, dates)]
+    assert kinds[0] == "short"          # not "buy"
+    assert "cover" in kinds
+
+
+def test_cli_writes_the_trades_chart(universe_archive: Path, tmp_path: Path, capsys):
+    path = tmp_path / "trades.svg"
+    assert portfolio.main([
+        "--data-dir", str(universe_archive), "--timeframe", "1d",
+        "--lookback", "30", "--rebalance", "30", "--calendar", "MID-USDT",
+        "--select", "sign", "--chart-trades", str(path), "--chart-symbols", "3",
+    ]) == 0
+    printed = capsys.readouterr().out
+    assert f"wrote {path}" in printed
+    assert path.read_text().startswith("<svg")
+
+
+# --- the per-pair census ------------------------------------------------------
+
+
+def test_pair_stats_agree_with_the_trade_log():
+    panels, dates = rise_then_fall_panels()
+    panels.append(portfolio.build_panel(*series([-0.02] * 500), "NEVER-USDT", dates, 30 * STEP))
+    result = portfolio.run_portfolio(
+        panels, dates, lookback=30, rebalance=30, mode="long-only",
+        select_mode="sign", costs=Costs(0), label="round",
+    )
+    rows = {row["symbol"]: row for row in portfolio.pair_stats(result, panels, dates)}
+    for symbol, kind, _, _ in portfolio.trade_log(result, panels, dates):
+        key = {"buy": "buys", "sell": "sells", "short": "shorts", "cover": "covers"}[kind]
+        assert rows[symbol][key] >= 1
+    assert rows["ROUND-USDT"]["buys"] == 1 and rows["ROUND-USDT"]["sells"] == 1
+    assert rows["NEVER-USDT"]["held"] == 0            # watched, never bought
+    assert rows["NEVER-USDT"]["buys"] == 0
+    assert rows["ROUND-USDT"]["first_held"] < rows["ROUND-USDT"]["last_held"]
+    # busiest first, and every symbol of the universe is in the census
+    assert len(rows) == len(panels)
+    assert [row["symbol"] for row in portfolio.pair_stats(result, panels, dates)][0] == "ROUND-USDT"
+
+
+def test_the_pairs_csv_is_a_census_of_the_universe(tmp_path: Path):
+    panels, dates = rise_then_fall_panels()
+    panels.append(portfolio.build_panel(*series([-0.02] * 500), "NEVER-USDT", dates, 30 * STEP))
+    result = portfolio.run_portfolio(
+        panels, dates, lookback=30, rebalance=30, mode="long-only",
+        select_mode="sign", costs=Costs(0), label="round",
+    )
+    path = tmp_path / "pairs.csv"
+    portfolio.write_pairs(path, result, panels, dates)
+    rows = list(csv_module.DictReader(path.open()))
+    assert [row["symbol"] for row in rows] == ["ROUND-USDT", "NEVER-USDT"]
+    assert rows[0]["ever_traded"] == "yes" and rows[1]["ever_traded"] == "no"
+    assert rows[1]["rebalances_held"] == "0"
+    assert rows[0]["first_held_utc"] and rows[0]["last_held_utc"]
+
+
+def test_the_report_lists_the_traded_pairs(universe_archive: Path, tmp_path: Path, capsys):
+    path = tmp_path / "pairs.csv"
+    assert portfolio.main([
+        "--data-dir", str(universe_archive), "--timeframe", "1d",
+        "--lookback", "30", "--rebalance", "30", "--calendar", "MID-USDT",
+        "--select", "sign", "--pairs-csv", str(path),
+    ]) == 0
+    printed = capsys.readouterr().out
+    assert "traded pairs:" in printed
+    assert "never bought" in printed
+    assert f"wrote {path}" in printed
+    assert path.exists()
+
+
+# --- the quote filter ---------------------------------------------------------
+
+
+def test_parse_quotes_and_quote_of():
+    assert portfolio.parse_quotes("usdt") == ("USDT",)
+    assert portfolio.parse_quotes(" USDT , btc ") == ("USDT", "BTC")
+    assert portfolio.parse_quotes("any") is None
+    assert portfolio.parse_quotes("ALL") is None
+    assert portfolio.parse_quotes("") is None
+    assert portfolio.quote_of("BTC-USDT") == "USDT"
+    assert portfolio.quote_of("ADA-BTC") == "BTC"
+    assert portfolio.quote_of("USDT-USDC") == "USDC"
+    with pytest.raises(ValueError):
+        portfolio.parse_quotes(",")
+
+
+def test_universes_keep_only_the_requested_quote(universe_archive: Path):
+    assert portfolio.universes(universe_archive, "1d") == [
+        "DOWN-USDT", "MID-USDT", "UP-USDT",
+    ]
+    assert "UP-BTC" in portfolio.universes(universe_archive, "1d", quotes=None)
+    assert portfolio.universes(universe_archive, "1d", quotes=("USDT", "BTC")) == [
+        "DOWN-USDT", "MID-USDT", "UP-BTC", "UP-USDT",
+    ]
+    assert portfolio.universes(universe_archive, "1d", quotes=("BTC",)) == ["UP-BTC"]
+
+
+def test_the_report_says_what_the_quote_filter_removed(universe_archive: Path, capsys):
+    assert portfolio.main([
+        "--data-dir", str(universe_archive), "--timeframe", "1d",
+        "--lookback", "30", "--rebalance", "30", "--calendar", "MID-USDT",
+        "--select", "sign",
+    ]) == 0
+    printed = capsys.readouterr().out
+    assert "3 symbols quoted in USDT" in printed
+    assert "1 other pairs skipped" in printed
+
+    assert portfolio.main([
+        "--data-dir", str(universe_archive), "--timeframe", "1d",
+        "--lookback", "30", "--rebalance", "30", "--calendar", "MID-USDT",
+        "--select", "sign", "--quote", "any",
+    ]) == 0
+    printed = capsys.readouterr().out
+    assert "4 symbols any quote currency" in printed
+    assert "skipped" not in printed
+
+
+def test_a_usdt_only_run_never_trades_a_cross_pair(universe_archive: Path, tmp_path: Path):
+    path = tmp_path / "pairs.csv"
+    assert portfolio.main([
+        "--data-dir", str(universe_archive), "--timeframe", "1d",
+        "--lookback", "30", "--rebalance", "30", "--calendar", "MID-USDT",
+        "--select", "sign", "--pairs-csv", str(path),
+    ]) == 0
+    rows = list(csv_module.DictReader(path.open()))
+    assert {row["symbol"] for row in rows} == {"UP-USDT", "MID-USDT", "DOWN-USDT"}
+    assert all(portfolio.quote_of(row["symbol"]) == "USDT" for row in rows)
+
+
+def test_the_book_is_exposed_to_the_very_period_it_is_decided_in():
+    """The decision at date k earns closes[k] -> closes[k+1], as `engine.py` does it.
+
+    The signal turns positive only on the middle date, and the price halves right after
+    it: a book that is filled at that close loses 50%. Running a rebalance late — which
+    this module used to do — would show a flat curve instead, because the position would
+    only start earning after the fall.
+    """
+    dates = [START + day * STEP for day in (60, 90, 120)]
+    panel = portfolio.Panel("MID-USDT", [100.0, 100.0, 50.0], [0.0, 1.0, 0.0])
+    result = portfolio.run_portfolio(
+        [panel], dates, lookback=30, rebalance=30, select_mode="sign",
+        threshold=0.0, costs=Costs(fee_per_side=0.0),
+    )
+    assert result.rebalances[1].longs == ["MID-USDT"]
+    assert result.equity[-1] == pytest.approx(0.5)
+
+
+def test_the_entry_commission_reaches_the_curve():
+    """Regression: the first rebalance used to write the bill into `equity[0]`.
+
+    That element is the base the curve is normalised by, so the entry commission
+    cancelled itself out — it was counted in `fees_paid` and invisible in the result.
+    """
+    dates = [START + day * STEP for day in (60, 90, 120)]
+    panel = portfolio.Panel("MID-USDT", [100.0, 100.0, 100.0], [1.0, 1.0, 1.0])
+    result = portfolio.run_portfolio(
+        [panel], dates, lookback=30, rebalance=30, select_mode="sign",
+        threshold=0.0, costs=Costs(fee_per_side=0.001),
+    )
+    assert result.fees_paid == pytest.approx(0.001)
+    assert result.equity[-1] == pytest.approx(1.0 - 0.001)
+    assert result.performance.total_return == pytest.approx(-0.001)

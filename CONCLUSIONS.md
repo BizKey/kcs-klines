@@ -27,7 +27,8 @@ series — a coin flip. Read them as four dials, not four facts:
 4. **how much is in the market** (§1.5, §1.6) — exposure sets the drawdown, and it
    scales return and drawdown together rather than improving either.
 
-What actually works is in §1.4, what the distribution looks like is in §1.5, and
+What actually works is in §1.4, what the distribution looks like is in §1.5,
+what happens when the same rule is applied to a whole universe is in §1.7, and
 what was killed by measurement is in §2.
 
 ### 1.1 Frequency, not the signal
@@ -117,6 +118,36 @@ worth optimising: each extra candidate in the grid is another chance to pick a
 noise winner. Set it, do not tune it — the opposite of what one expects from a
 parameter that buys the most.
 
+**Per-pair tuning does not transfer — measured on 765 daily pairs.** The same rule
+(hold while the close is above the close `lookback` bars ago, re-decide every `rebalance`
+bars, 0.1% a side) was run over a 4x5 grid of lookbacks and rebalances for every pair, and
+then the best configuration found in the **first half** of each pair's history was applied
+to the **second half**:
+
+| what | median Sharpe |
+|---|---|
+| best of 20 configurations, chosen on the first half | **+0.58** |
+| the same choices, on the second half | **−0.36** |
+| a fixed, untuned 30/7, on the second half | **−0.35** |
+
+The best configuration in the first half is also the best in the second half in only
+**43 of 765 cases (6%)** — a random pick would score 5%. So a "best period per pair"
+exists on the data it was chosen on and is worth *exactly nothing* afterwards: tuned and
+fixed end up within 0.01 Sharpe of each other. What *is* a population property is the grid
+itself — median Sharpe across all pairs, by cell:
+
+| lookback | rebalance 1 | 7 | 14 | 30 | 90 |
+|---|---|---|---|---|---|
+| 7 | −0.33 | **−0.11** | −0.19 | −0.26 | −0.29 |
+| 14 | −0.32 | −0.19 | −0.30 | −0.44 | −0.43 |
+| 30 | −0.28 | −0.19 | −0.24 | −0.29 | −0.28 |
+| 90 | −0.32 | −0.31 | −0.31 | −0.31 | −0.41 |
+
+Every cell is negative (the median asset loses under every setting — §1.2 again), reading
+the signal every bar is the worst corner, and one week/four weeks is the best. That is
+§1.1 restated on daily bars: **the grid is a population parameter worth setting; the
+pair-level optimum is noise.**
+
 ### 1.2 The universe is a graveyard, and the cross-section ranks it by pulse
 
 996 pairs, of which the top 10 are 61.7% of all turnover and the top 200 are 94%.
@@ -175,7 +206,22 @@ cross-sectional momentum ranked by trailing 30-day return, rebalanced monthly:
 The filter moved the *passive* baseline by nine points (−49% → −41%) and the momentum
 book by none (−81% → −82%). So the graveyard explains why the *universe* loses, not why
 the *ranking* loses: selecting the strongest trailing return picked names that then did
-worse than the average pair, in both universes. That is the opposite of the cross-sectional
+worse than the average pair, in both universes.
+
+**Half of that conclusion was too strong — it is the *liquidity* filter, not the age
+filter, that rescues a ranking.** Re-run on the universe the book itself uses (top 20 by
+trailing turnover with three years of history, 2019-03 … 2026-09, monthly decisions):
+
+| universe | buy everything that rose | buy the top 20% by rank | buy everything that fell | hold it all |
+|---|---|---|---|---|
+| every pair (≈390 names) | **6.53x** (Sharpe 0.43) | 2.76x (0.20) | 1.71x (0.13) | 3.14x (0.26) |
+| **top 20 by turnover** | 2.96x (0.24) | **6.04x** (0.34) | 0.43x (−0.19) | 2.54x (0.21) |
+
+Two things follow. A *history* filter over 412 names left the ranking at −82%, while a
+*turnover* filter over 20 names puts it at +504%: liquidity, not age, is what makes a
+cross-section usable. And on a broad universe the sign filter beats the ranking (6.53x
+against 2.76x) while on a liquid handful the ranking wins — with 140 names you are buying
+beta, with three you are buying concentration. That is the opposite of the cross-sectional
 premise, and it is the cleanest statement of why this repository's working rule is
 **time-series** momentum (compare an asset with its own past) and not the **cross-sectional**
 kind (compare assets with each other).
@@ -281,6 +327,61 @@ Two caveats that matter more than the numbers:
 
 ---
 
+### 1.7 The same signal, built two ways
+
+`--select sign` and `--strategy tsmom` read the **same** signal: the close above its level
+`lookback` bars ago, on the same absolute grid, held between decisions. It is literally the
+same parameter — `Tsmom.threshold` is the portfolio's `--threshold`. Run over the same nine
+years with the same 7-bar lookback and 7-bar grid, they agree on nothing else:
+
+| | TSMOM, one asset (BTC) | `--select sign`, 836 USDT pairs |
+|---|---|---|
+| assets | 1 | 0 … 604, median 51, mean 109 |
+| weight per name | 0 or 100% | 0.2–2% |
+| **out of the market** | **46% of bars** (mean exposure 0.54) | **4% of rebalances** |
+| decisions in nine years | 114 trades | 466 rebalances × 1.30 books |
+| commission | ~20% of capital | **860.6% of capital** |
+| nine years | **10.87x**, Sharpe 0.55, −75.0% | **12.4x**, Sharpe 0.30, **−92.6%** |
+| last five years | **+86.7%**, 0.36, −38.1% | **−65.4%**, −0.30, −88.6% |
+| its benchmark | holding BTC 16.24x, 0.46, −82.9% | the same universe −37.0% |
+
+(Measured after the timing fix in §3 — the loop used to run the whole strategy one
+rebalance late, which flattered this book: the same comparison read 30.5x at Sharpe 0.42
+before. `--quote any` gives 12.4x→**33.4x** at Sharpe 0.57 and −81.4%, so the crosses are
+*not* the drag they looked like under the lag. The fee totals are in starting-capital
+units and grow with the curve; the turnover is what compares.)
+
+The mechanism changed, not the signal. TSMOM's entire measured value is *being absent* — it
+is flat 46% of the time on BTC, which is why it beats holding on 88% of 966 series and halves
+the drawdown. A book of ~146 names neutralises that half of the rule: something is always
+rising, so the filter never takes the account out of the market (0% of 466 rebalances), and
+each name is too small (0.2%) for its own signal to matter. What is left is the average of
+the universe — an alt index with a weekly re-shuffle.
+
+That re-shuffle is the expensive part, and its fragility is measurable. The same 7/7
+configuration at different commissions:
+
+| fee per side | total | CAGR | Sharpe |
+|---|---|---|---|
+| 0.00% | +3,197% | 47.7% | 0.56 |
+| 0.05% | +2,303% | 42.6% | 0.50 |
+| **0.10%** | **+1,651%** | 37.7% | 0.45 |
+| 0.20% | +829% | 28.3% | 0.35 |
+| 0.30% | +392% | 19.5% | 0.25 |
+
+Every extra 0.1% per side roughly halves the result. A control run says the same thing from
+the other side: holding **every** pair with the same weekly re-equalisation and no sign
+filter returns **+350%** at 30% of capital in commission and 0.11 turnover per rebalance,
+against the filter's 1.36 — so the signal is worth about 4.7x and multiplies the trading
+twelvefold.
+
+**The rule that follows:** apply this signal **per asset** — one position, or a handful of
+liquid names (`kcs-basket`: five majors, weekly grid, +202.9% against +51.1% for holding them)
+— and never to the whole universe at equal weight. Across ~1000 pairs the same signal stops
+being a trend rule and becomes an index with a bill attached. It is the cleanest illustration
+of §1.1: the signal is the cheapest part of the system; the universe, the ability to leave
+the market, and the number of trades decide the outcome.
+
 ## 2. Rejected by measurement
 
 Each of these was tested on this archive, with costs, and lost. Do not re-open
@@ -301,6 +402,43 @@ them without new data.
 | **Grid trading, at portfolio level** | Best of five configurations **1.51x against 2.00x** for holding the same window, with a −61% drawdown at half the average exposure — worse risk per unit of return than simply holding half in BTC and half in cash. Re-centring the grid monthly turned it into **0.64x** and weekly into **0.52x**, because re-centring *realises* losses; fees (5% of the budget at 2% spacing) were the smaller problem. It is structurally "buy more as it falls", so exposure peaks at the bottom. |
 | **Martingale / averaging down** | On a 10,000 budget every sizing tested **ran out of cash in the first big decline** — base 500 on 2021-12-09 at 47,549, base 1,000 on 2021-11-26 at 53,723 — and then held a bag for years: −67.5% and −70.7% drawdowns for 1.24x and 1.28x over the five years. The base-100 variant shows a −15% drawdown only because 99% of the capital never left the account. |
 | **RSI** | Buying oversold (RSI(14) < 30) 0.52x with a −67.8% drawdown, and the registry's 2-period reversion −29.2% over the same window; RSI(14) > 50 as a momentum filter 1.35x at −50.3%; only "buy strength" (RSI > 70) was respectable at **1.93x with −20.7%**, still behind a plain 200-day SMA (2.97x) on the same data. |
+
+### Retirement-plan rules, measured: "buy what rose last month"
+
+The idea of deciding on the first of the month — buy the pairs whose month closed up, sell
+the ones that closed down — is monthly *time-series* momentum applied to a whole universe:
+a sign filter, not a ranking. Both forms were measured on the same engine (decision on the
+month's last close, applied on the next close, 0.1% a side, equal weight, cash when nothing
+qualifies), over 2019-03 … 2026-09, with the last five years reported separately:
+
+| rule | 7.6 years | CAGR | Sharpe | max DD | names held | book turned over per month | fees | last 5 years |
+|---|---|---|---|---|---|---|---|---|
+| all pairs: buy what rose | 6.53x | 28.1% | 0.43 | −77.1% | 142 | 1.39 | **82% of capital** | **0.61x** |
+| all pairs: buy the top 20% | 2.76x | 14.3% | 0.20 | −79.1% | 77 | 1.52 | 40% | 0.50x |
+| all pairs: buy what fell (control) | 1.71x | 7.4% | 0.13 | −83.5% | 244 | 1.15 | 31% | 0.37x |
+| top 20 liquid: buy what rose | 2.96x | 15.4% | 0.24 | −89.6% | 7.4 | 1.05 | 31% | 0.36x |
+| top 20 liquid: buy the top 20% | 6.04x | 26.8% | 0.34 | −91.4% | 3.1 | 1.25 | 60% | 0.54x |
+| **one asset (BTC): buy if the month closed up** | **17.65x** | 46.1% | **0.86** | **−55.7%** | 0.6 | 0.48 | 32% | 2.06x |
+| holding BTC | 20.17x | 48.7% | 0.64 | −76.6% | 1 | 0 | 0% | 1.74x |
+| TSMOM on BTC, **weekly** grid, same period | **32.87x** | — | **1.06** | **−44.2%** | 1 | — | — | — |
+
+What the table says, in order of size:
+
+* **The direction of the idea is right and the sign carries information**: buying what rose
+  beat buying what fell in both universes (2.96x against 0.43x on the liquid one), and it
+  beat holding the same broad universe (6.53x against 3.14x).
+* **Breadth is what breaks it.** 142 names, re-equalised monthly, turn over 1.39 books a
+  month and pay **82% of the starting capital** in commission over 7.6 years (~10.9% a
+  year) — the single largest number in the row.
+* **The edge is not stable**: over the last five years the broad version returns 0.61x
+  (−39%) while holding BTC returns 1.74x (+74%). The 6.53x is 2019–2021.
+* **The best version of the same idea is on one asset.** The monthly sign rule on BTC made
+  17.65x at Sharpe 0.86 and a −55.7% drawdown, with 44% of months spent in cash — a better
+  risk shape than holding BTC (0.64, −76.6%) at a similar return.
+* **And the monthly grid is the expensive part of it.** On BTC, over exactly the same
+  period, the same 30-day signal decided **weekly** returns 32.87x at Sharpe 1.06 and
+  −44.2%, against 13.71x at 0.74 and −65.1% decided monthly. That is §1.1 restated with
+  money: the grid is worth more than the signal, and a month is a slow grid.
 
 ### The indicator zoo, screened
 
@@ -427,6 +565,31 @@ Engine health, checked over the whole archive: 4,434 backtests, **zero wiped
 accounts**, maximum `bookkeeping_error` 8.9e-15, no exceptions.
 
 ---
+
+**The portfolio ran one rebalance late (fixed).** `run_portfolio` decided the book at
+rebalance `k` and then marked the *previous* book over the period `k → k+1`, swapping the new
+one in afterwards — so the strategy took effect one rebalance period after its signal: seven
+bars on a weekly grid, thirty on a monthly one. The engine's convention (and what the report
+claims) is that a decision taken on a close is exposed to the next bar. Found while
+attributing P&L per pair: a replication of the loop matched the module to the digit under the
+lagged convention, and the two conventions differ by a factor on the same book — 22.76x
+(decided at k, earns k → k+1) against 56.70x (as it ran). Every portfolio number in this
+repository, including the ones quoted in §1.7 and the earlier "the quote filter pays"
+reading, was re-measured afterwards; `kcs-riskparity` never had the flaw (its loop states
+"yesterday's decision takes effect at this close, never at its own"). The second half of the
+same fix: the entry commission used to be written into `equity[-1]`, which on the first
+iteration *is* `equity[0]` — the base the curve is normalised by — so it cancelled itself out
+and was invisible in every published portfolio result. Both are pinned by tests
+(`test_the_book_is_exposed_to_the_very_period_it_is_decided_in`,
+`test_the_entry_commission_reaches_the_curve`).
+
+**Numbers measured before that fix.** The exploratory figures that came from `/tmp` scripts
+driving the old module — the "cross-sectional momentum over 965 symbols −81.39%" line below,
+the monthly "buy what rose" 6.53x, the fee-sensitivity ladder and the per-pair grid
+comparisons — were produced under the lagged convention. The *rankings* they establish (a
+ranking loses, the sign filter is the least bad, the grid matters more than the signal) were
+re-checked after the fix and still hold, but the levels moved, so quote the re-measured
+tables in §1.7 and `AGENTS.md` rather than those.
 
 ## 4. Not modelled — read every number above with this in mind
 
