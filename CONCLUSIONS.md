@@ -313,6 +313,46 @@ over 8.93 years, against BTC's own 0.46 and −82.9%. **The missing piece is the
 the gated wide book** — `kcs-portfolio` still has no volatility target, so the two halves of
 this toolkit (`kcs-riskparity`'s sizing, `kcs-portfolio`'s universe) have not been joined yet.
 
+### 1.2d The three approaches on one window, and the answer is not the wide book
+
+The sizing half and the universe half are joined now: `kcs-portfolio` takes `--vol-target`,
+`--vol-window`, `--vol-cap`/`--vol-floor`, and it sizes the book from the **unscaled** book's
+own completed periods (measuring the account instead would divide by a volatility that
+already contains the multiplier and turn the dial into a feedback loop). On the last five
+years — the window with no 2021 mania in it — the three candidate approaches are:
+
+| approach | how the names are chosen | total | benchmark | Sharpe | max DD |
+|---|---|---|---|---|---|
+| wide book: 836 USDT pairs, sign 7/7 + trend gate 200 | by rule, ~31 names | −45.55% | −49.03% | −0.18 | −85.8% |
+| the same book + `--vol-target 25%` | by rule, ~31 names | **+37.06%** | −49.03% | **0.18** | −53.8% |
+| `kcs-riskparity --top 5 --vol-budget 0.4 --trend 200d` | by rule, 5 names, monthly re-equalised | +50.11% | — | 0.19 | −49.6% |
+| basket of 5 majors + `voltarget-sma` 50/30% | **hand-picked** | +126.87% | +114.23% | **0.99** | **−19.9%** |
+| basket of 5 + `voltarget-sma` 50/30% | **top 5 by turnover before the window** | +123.62% | +62.64% | 0.87 | −21.0% |
+| basket of 10 + `voltarget-sma` 50/30% | **top 10 by turnover before the window** | **+163.94%** | +98.82% | **1.17** | **−16.6%** |
+
+Three conclusions, in order of importance.
+
+**1. The result does not depend on hindsight** — the open thread this repository has carried
+since §1.6. The five names a rule could have picked on 2021-08-04 (the top five by trailing
+turnover) are `BTC, ETH, XRP, ADA, DOGE`, not the hand-picked `BTC, ETH, SOL, XRP, BNB` (SOL
+was not even in the top twelve then). The same rule on that honest five returns +123.62% at
+Sharpe 0.87, and on the honest ten **+163.94% at Sharpe 1.17 with a −16.6% drawdown** — better
+than the hand-picked basket on every measure. So "a handful of the most traded pairs, a slow
+trend filter per name, and a volatility target" is a rule, not a wish.
+
+**2. Sizing is what rescues the wide book, and it is still not enough.** `--vol-target 25%`
+turns the gated wide book from −45.55% into +37.06% and lifts Sharpe from −0.18 to 0.18 while
+cutting the drawdown from −86% to −54% (fees fall from 1,559% of capital to 113%) — the single
+largest improvement measured on that book. But 0.18 is still far below the narrow baskets'
+0.87-1.17: **a thousand pairs is the wrong shape for this rule** even with the right sizing.
+
+**3. Re-equalising between names destroys the edge.** `kcs-riskparity` uses the same idea
+(rule-picked names, a volatility budget, a trend gate) and lands at +50% with Sharpe 0.19,
+because it re-equalises the book every month — averaging down into the weakest leg, exactly
+what §1.6 measured on the two-name book. The basket holds **fixed weights** and never
+rebalances, so a winner keeps its weight while it runs. The comparison is not "which tool is
+better" but "rebalancing a five-name trend book is a cost, not a service".
+
 ### 1.3 Costs
 
 KuCoin spot VIP0 is not 0.1% for everyone: class A is 0.1/0.1% maker/taker, class
@@ -893,7 +933,7 @@ treat any single multiple as noise until a walk-forward agrees with it.
 ## 8. Reproducing the headline numbers
 
 ```bash
-uv run pytest                          # 413 tests, ~28 s
+uv run pytest                          # 417 tests, ~28 s
 
 # one asset
 uv run kcs-backtest --symbol BTC-USDT --strategy tsmom \
@@ -942,6 +982,15 @@ for symbol, timeframe in data.available_series("data/kucoin/spot"):
 Four shells in parallel finish the 4,434 series in about two and a half minutes
 (`/dev/shm` is not writable in some sandboxes, so `multiprocessing` is not an
 option there; shard the list instead).
+
+**The three-approach comparison.** The rule-picked rows come from
+`uv run kcs-portfolio --timeframe 1d --lookback 7 --rebalance 7 --select sign --trend-gate 200
+--last 267` (with and without `--vol-target 25%`), the narrow ones from
+`uv run kcs-basket --timeframe 1d --strategy voltarget-sma --param window=50 --param
+target_vol=0.30 --symbols ...` over the same 5.16 years, and the no-hindsight basket was
+chosen by median quote turnover over the 90 days before the window opened (a throwaway
+script: rank every USDT pair by that median, take the top five or ten). `kcs-riskparity`
+rows use `--min-history 3y --last 1870d`.
 
 **The gate experiment and its placebo.** The tables in §1.2b come from a throwaway script
 that built the panels once and then, for each configuration, ran the same book through

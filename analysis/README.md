@@ -18,7 +18,7 @@ uv run kcs-backtest --strategy tsmom --param lookback=30 --param rebalance=7 \
     --dd-scale 10,40,25                           # cut size while the account is in drawdown
 uv run kcs-riskparity --top 5 --min-history 3y --vol-budget 0.4   # a de-risked book
 uv run kcs-journal verify        # re-check what was recorded
-uv run pytest                    # 413 tests
+uv run pytest                    # 417 tests
 ```
 
 `analysis` is a [uv](https://docs.astral.sh/uv/) workspace member: the root

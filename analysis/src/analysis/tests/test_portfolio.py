@@ -889,24 +889,40 @@ def test_a_vol_target_off_changes_nothing():
 
 
 def test_a_wild_book_is_scaled_down_and_a_calm_one_is_not():
-    dates = daily_dates(count=40)
-    wild = [portfolio.build_panel(*series([0.20 if k % 2 else -0.20] * 500), "WILD-USDT", dates, 30 * STEP)]
-    calm = [portfolio.build_panel(*series([0.002] * 500), "CALM-USDT", dates, 30 * STEP)]
-    for panels, cap in ((wild, None), (calm, 0.5)):
-        sized = portfolio.run_portfolio(
-            panels, dates, lookback=30, rebalance=30, select_mode="sign",
-            costs=Costs(fee_per_side=0.0), label="sized",
-            vol_target=portfolio.VolTarget(target=0.25, window=5, cap=cap or 1.0),
-        )
-        if cap is None:
-            assert sized.mean_scale < 1.0            # too wild: hold less
-        else:
-            assert sized.mean_scale == pytest.approx(cap)   # calm: capped, never geared
-    assert sized.mean_scale <= 1.0
+    dates = daily_dates(count=20)
+    # hand-built so the signal is always long: the sizing is what is under test
+    wild = [portfolio.Panel(
+        "WILD-USDT", [100.0 * (1.4 if i % 2 else 1.0) for i in range(len(dates))],
+        [1.0] * len(dates),
+    )]
+    calm = [portfolio.Panel(
+        "CALM-USDT", [100.0 * (1.0 + 0.001 * i) for i in range(len(dates))],
+        [1.0] * len(dates),
+    )]
+    sized_wild = portfolio.run_portfolio(
+        wild, dates, lookback=30, rebalance=30, select_mode="sign",
+        costs=Costs(fee_per_side=0.0), label="wild",
+        vol_target=portfolio.VolTarget(target=0.25, window=5),
+    )
+    sized_calm = portfolio.run_portfolio(
+        calm, dates, lookback=30, rebalance=30, select_mode="sign",
+        costs=Costs(fee_per_side=0.0), label="calm",
+        vol_target=portfolio.VolTarget(target=0.25, window=5, cap=0.5),
+    )
+    window = 5
+    assert sized_wild.mean_scale < 0.5          # far too wild: hold a fraction
+    assert all(scale < 0.5 for scale in sized_wild.vol_scales[window:])
+    # the calm book would be geared up to 70x, so the cap is what stops it
+    assert all(scale == pytest.approx(0.5) for scale in sized_calm.vol_scales[window:])
+    # neither run ever holds more than the capital, and the warm-up stays unscaled
+    assert max(sized_wild.vol_scales) <= 1.0 and max(sized_calm.vol_scales) <= 1.0
+    assert sized_wild.vol_scales[:window] == [1.0] * window
 
 
 def test_the_sizing_reading_never_sees_the_future():
-    dates = daily_dates(count=30)
+    # every rebalance date sits inside the 500 bars, so the last bar is strictly after
+    # every reading: changing it must not move a single earlier multiplier.
+    dates = daily_dates(count=15)
     closes = [100.0 * (1.02**i) for i in range(500)]
     times = [START + i * STEP for i in range(500)]
     panel = portfolio.build_panel(times, closes, "X-USDT", dates, 30 * STEP)
@@ -922,7 +938,8 @@ def test_the_sizing_reading_never_sees_the_future():
         lookback=30, rebalance=30, select_mode="sign", costs=Costs(fee_per_side=0.0),
         label="b", vol_target=portfolio.VolTarget(target=0.25, window=5),
     )
-    assert first.vol_scales[:-1] == again.vol_scales[:-1]
+    assert first.vol_scales == again.vol_scales
+    assert first.equity[:-1] == again.equity[:-1]
 
 
 def test_sizing_down_pays_commission_and_the_orders_are_validated():

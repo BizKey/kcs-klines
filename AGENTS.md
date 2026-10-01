@@ -36,7 +36,7 @@ place is, and what has already been learned the hard way.
 | `src/` | Rust collector: `kucoin/client.rs`, `storage/parquet_store.rs`, `collector.rs`, `verify.rs`, `status.rs` |
 | `tests/` | Rust tests; `live_api.rs` is `--ignored` and hits the real exchange |
 | `analysis/src/analysis/` | `data.py` `metrics.py` `engine.py` `report.py` `journal.py` `walkforward.py` `portfolio.py` `basket.py` `riskparity.py` `run_backtest.py`, `strategies/`, `tests/` |
-| `analysis/src/analysis/tests/` | 413 pytest tests (engine invariants, registry-wide strategy checks, CLI, journal, walk-forward, portfolio, basket, real-data regression) |
+| `analysis/src/analysis/tests/` | 417 pytest tests (engine invariants, registry-wide strategy checks, CLI, journal, walk-forward, portfolio, basket, real-data regression) |
 | `analysis/out/` | artifacts (CSV/JSON/SVG), gitignored |
 | `analysis/README.md` | the toolkit in detail; `journal/README.md` the journal format |
 | root `README.md` | the collector in detail (KuCoin API traps, schema, scheduling) |
@@ -46,7 +46,7 @@ place is, and what has already been learned the hard way.
 ```bash
 cargo test && cargo clippy --all-targets      # Rust
 uv sync                                       # Python env (installs the analysis member)
-uv run pytest                                 # 413 tests, ~28 s
+uv run pytest                                 # 417 tests, ~20 s
 uv run kcs-backtest --list                    # 16 registered strategies + their parameters
 uv run kcs-backtest --strategy tsmom --param lookback=720 --param rebalance=168
 uv run kcs-backtest --symbol BTC-USDT --last 1y   # only the last year, warm history
@@ -527,10 +527,35 @@ Sharpe 0.38 on 1h.
   the passive hold on return** in this window (the hold made +114%); what they buy is risk,
   and the best row beats it on both. And **only 18.8% of the capital is in the assets on
   average** — the rest waits in cash, which is what the volatility target does. The five names
-  were picked knowing they survived (§7 thread 1), and the rule-picked analogue is
-  `kcs-riskparity --top 5 --min-history 3y --vol-budget 0.4 --trend 200d` (+868%, Sharpe
-  0.68, −47.7% over 8.93 years against BTC's 0.46/−82.9%). **The gap left open: `kcs-portfolio`
-  has no volatility target**, so the sizing half and the universe half still are not joined.
+  were picked knowing they survived, and **the no-hindsight version of the same rule does at
+  least as well** — see the three-approach bullet below, where the top ten by turnover as of
+  2021-08-04 return +163.94% at Sharpe 1.17. The rule-picked analogue *with monthly
+  re-equalisation* is `kcs-riskparity --top 5 --min-history 3y --vol-budget 0.4 --trend 200d`
+  (+868%, Sharpe 0.68, −47.7% over 8.93 years against BTC's 0.46/−82.9%), and `kcs-portfolio`
+  now takes `--vol-target` too, so the sizing half is available on every book.
+* **The book can be sized to a volatility target (`--vol-target`), and on the wide book that
+  is the largest single improvement measured.** The reading comes from the **unscaled** book's
+  own completed periods (`--vol-window`, in rebalance periods), so it never sees the future and
+  never feeds on its own multiplier; `--vol-cap`/`--vol-floor` clamp it. On the gated 836-pair
+  book over nine years, `--vol-target 25% --vol-window 12` takes the result from +2,675% at
+  Sharpe 0.49 and a −86.8% drawdown to +655% at **Sharpe 0.73** and **−53.8%**, with the
+  commission bill falling from 1,559% of capital to 113% (turnover 1.10 → 0.47) — because a
+  smaller book also trades smaller. Over the last five years it turns −45.55% into +37.06%
+  (Sharpe −0.18 → 0.18, −85.8% → −53.8%). It does not make the wide book *good*, though: see
+  the three-approach table below.
+* **Three approaches, one window (last 5 years), and the wide book loses.** Rule-picked wide
+  (836 USDT + trend gate 200): −45.55% at Sharpe −0.18; the same with `--vol-target 25%`:
+  +37.06% at 0.18; `kcs-riskparity --top 5 --vol-budget 0.4 --trend 200d`: +50.11% at 0.19;
+  a basket of five majors with `voltarget-sma` 50/30%: +126.87% at **0.99** and −19.9%; and —
+  the number that matters — **the same basket built from the top five by turnover as of
+  2021-08-04** (BTC/ETH/XRP/ADA/DOGE, no hindsight at all): +123.62% at **0.87**, with the
+  **top ten**: +163.94% at **1.17** and −16.6%, *better than the hand-picked five*. So the
+  configuration "a handful of the most traded pairs + a slow trend filter per name + a
+  volatility target" survives without hindsight, which closes §1.6's open thread for it.
+  Note what the two narrow rule-picked rows disagree about: `kcs-riskparity` re-equalises the
+  book **monthly** and lands at Sharpe 0.19, the basket holds **fixed weights** and lands at
+  0.87-1.17. Rebalancing a five-name trend book averages down into its weakest leg and is a
+  cost, not a service.
 * **A sweep whose columns are all identical is a broken sweep, not a discovery.** Two of my
   own experiment scripts failed this way while hunting the health filter, and both produced
   confident tables: (1) the trend-window sweep gave byte-identical results for 50/100/150/
@@ -641,11 +666,13 @@ Sharpe 0.38 on 1h.
 ## Open threads, in the order I would pick them up
 
 `CONCLUSIONS.md` §7 carries the same list with the measurements behind it, and two
-of these have moved since they were written: the archive-wide screen says a
-liquidity filter is worth about +9 points of median return and nothing more, while
-**removing the hindsight from the hand-picked asset list** is now the first thing
-to do — the best-looking result in this repository rests on five names chosen
-knowing they survived.
+of these have moved since they were written. The archive-wide screen says a liquidity
+filter is worth about +9 points of median return and nothing more. **"Remove the
+hindsight from the hand-picked asset list" is now answered for the configuration that
+matters**: the same rule on the top five by turnover as of 2021-08-04 returns +123.62% at
+Sharpe 0.87 and on the top ten +163.94% at 1.17, against +126.87% at 0.99 for the
+hand-picked five — the rule does not need the hindsight, and what is left to do with it is
+walk-forward the window, not de-bias the names.
 
 1. Walk-forward the health-gate thresholds. `--max-below-peak` improves the recent five
    years most (−50% → +19%, −30% → +1,067%) but has no plateau, so its threshold is a
