@@ -784,3 +784,83 @@ def test_the_entry_commission_reaches_the_curve():
     assert result.fees_paid == pytest.approx(0.001)
     assert result.equity[-1] == pytest.approx(1.0 - 0.001)
     assert result.performance.total_return == pytest.approx(-0.001)
+
+
+# --- the health gates ---------------------------------------------------------
+
+
+def _panel_with_gates(**gates):
+    dates = [START + day * STEP for day in (60, 90, 120)]
+    base = {name: [None] * len(dates) for name in
+            ("below_peak", "trend", "turnover", "volatility")}
+    base.update(gates)
+    return portfolio.Panel("X-USDT", [100.0] * len(dates), [1.0] * len(dates), gates=base)
+
+
+def test_a_gate_that_is_off_lets_everything_through():
+    panel = _panel_with_gates()
+    assert portfolio.gate_ok(panel, 1, None)
+    assert portfolio.gate_ok(panel, 1, portfolio.GateSpec())
+    assert not portfolio.GateSpec().active
+
+
+def test_each_gate_compares_its_reading_and_refuses_missing_history():
+    panel = _panel_with_gates(trend=[-0.1, 0.0, 0.2], below_peak=[-0.95, -0.5, -0.2],
+                              turnover=[1e3, 1e5, 1e6], volatility=[0.01, 0.2, 0.4])
+    # trend: at or above its own mean by the threshold (the report prints ">= ...")
+    assert not portfolio.gate_ok(panel, 0, portfolio.GateSpec(trend_bars=200))
+    assert portfolio.gate_ok(panel, 1, portfolio.GateSpec(trend_bars=200))
+    assert not portfolio.gate_ok(panel, 1, portfolio.GateSpec(trend_bars=200, trend_threshold=0.05))
+    # distance from the running peak
+    assert not portfolio.gate_ok(panel, 0, portfolio.GateSpec(max_below_peak=0.5))
+    assert portfolio.gate_ok(panel, 1, portfolio.GateSpec(max_below_peak=0.5))
+    # liquidity and the volatility floor
+    assert not portfolio.gate_ok(panel, 0, portfolio.GateSpec(min_turnover=1e4))
+    assert portfolio.gate_ok(panel, 1, portfolio.GateSpec(min_turnover=1e4))
+    assert not portfolio.gate_ok(panel, 0, portfolio.GateSpec(min_volatility=0.05))
+    assert portfolio.gate_ok(panel, 1, portfolio.GateSpec(min_volatility=0.05))
+    # a reading that does not exist yet counts as failed, not as passed
+    empty = portfolio.Panel("Y-USDT", [100.0] * 3, [1.0] * 3)
+    assert not portfolio.gate_ok(empty, 1, portfolio.GateSpec(trend_bars=200))
+    assert portfolio.gate_ok(empty, 1, portfolio.GateSpec())
+
+
+def test_a_gated_run_drops_names_and_says_so(tmp_path: Path, capsys):
+    root = tmp_path / "spot"
+    # one symbol falls below its own long mean, one stays above it
+    for symbol, drift in (("STRONG-USDT", 0.01), ("DYING-USDT", -0.01)):
+        closes = [100.0]
+        for _ in range(400):
+            closes.append(closes[-1] * (1.0 + drift))
+        write_archive(root, symbol, "1d", make_bars(closes, start=START, step=STEP))
+    path = tmp_path / "pairs.csv"
+    assert portfolio.main([
+        "--data-dir", str(root), "--timeframe", "1d", "--lookback", "30",
+        "--rebalance", "30", "--calendar", "STRONG-USDT", "--select", "sign",
+        "--trend-gate", "100", "--pairs-csv", str(path),
+    ]) == 0
+    printed = capsys.readouterr().out
+    assert "gates       : trend 100 bars" in printed
+    assert "dropped ~1 candidate(s) per rebalance" in printed
+    # the falling symbol is watched and never bought: the gate is the only reason
+    rows = {row["symbol"]: row for row in csv_module.DictReader(path.open())}
+    assert rows["DYING-USDT"]["ever_traded"] == "no"
+    assert rows["STRONG-USDT"]["ever_traded"] == "yes"
+
+
+def test_the_gates_never_see_the_future():
+    """A gate reading at date k must not move when a later close changes."""
+    dates = [START + day * STEP for day in (60, 90, 120)]
+    closes = [100.0 + 10 * i for i in range(200)]
+    before = portfolio.build_panel(
+        [START + i * STEP for i in range(200)], closes, "X-USDT", dates, 30 * STEP,
+        gate_seconds=30 * STEP, trend_bars=100, turnover=[1e5] * 200,
+    )
+    rewritten = list(closes)
+    rewritten[-1] *= 10.0                      # a later bar, after every gate reading
+    after = portfolio.build_panel(
+        [START + i * STEP for i in range(200)], rewritten, "X-USDT", dates, 30 * STEP,
+        gate_seconds=30 * STEP, trend_bars=100, turnover=[1e5] * 200,
+    )
+    for name in ("below_peak", "trend", "volatility"):
+        assert before.gates[name][:2] == after.gates[name][:2]

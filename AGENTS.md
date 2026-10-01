@@ -36,7 +36,7 @@ place is, and what has already been learned the hard way.
 | `src/` | Rust collector: `kucoin/client.rs`, `storage/parquet_store.rs`, `collector.rs`, `verify.rs`, `status.rs` |
 | `tests/` | Rust tests; `live_api.rs` is `--ignored` and hits the real exchange |
 | `analysis/src/analysis/` | `data.py` `metrics.py` `engine.py` `report.py` `journal.py` `walkforward.py` `portfolio.py` `basket.py` `riskparity.py` `run_backtest.py`, `strategies/`, `tests/` |
-| `analysis/src/analysis/tests/` | 409 pytest tests (engine invariants, registry-wide strategy checks, CLI, journal, walk-forward, portfolio, basket, real-data regression) |
+| `analysis/src/analysis/tests/` | 413 pytest tests (engine invariants, registry-wide strategy checks, CLI, journal, walk-forward, portfolio, basket, real-data regression) |
 | `analysis/out/` | artifacts (CSV/JSON/SVG), gitignored |
 | `analysis/README.md` | the toolkit in detail; `journal/README.md` the journal format |
 | root `README.md` | the collector in detail (KuCoin API traps, schema, scheduling) |
@@ -46,7 +46,7 @@ place is, and what has already been learned the hard way.
 ```bash
 cargo test && cargo clippy --all-targets      # Rust
 uv sync                                       # Python env (installs the analysis member)
-uv run pytest                                 # 409 tests, ~28 s
+uv run pytest                                 # 413 tests, ~28 s
 uv run kcs-backtest --list                    # 16 registered strategies + their parameters
 uv run kcs-backtest --strategy tsmom --param lookback=720 --param rebalance=168
 uv run kcs-backtest --symbol BTC-USDT --last 1y   # only the last year, warm history
@@ -58,6 +58,7 @@ uv run kcs-journal report | verify | show --id …
 uv run kcs-walkforward --strategy sma --grid window=50,100,200 --train 3000 --test 1000
 uv run kcs-portfolio --timeframe 1d --lookback 30 --rebalance 30 --top 0.2
 uv run kcs-portfolio --timeframe 1d --lookback 30 --rebalance 30 --select sign --threshold 0
+uv run kcs-portfolio --timeframe 1d --lookback 7 --rebalance 7 --select sign --trend-gate 200
 ```
 
 ## Invariants — break these and the numbers become lies
@@ -436,6 +437,47 @@ Sharpe 0.38 on 1h.
   re-equalisation and **no** filter returns +350% at 0.11 turnover instead of 1.30. Apply the
   signal per asset (one position, or a handful of liquid names); never to ~1000 pairs at
   equal weight.
+* **The filter for dying assets is "distance from your own high", not liquidity.**
+  `kcs-portfolio` now has health gates, all computed from bars at or before the rebalance
+  date: `--trend-gate N` (close at or above its own N-bar mean), `--max-below-peak P` (drop
+  names more than P below their own *running* peak), `--min-turnover X` and
+  `--min-volatility P` (annualised floor, which is what removes dead-calm stablecoins);
+  `--gate-window` sets the bars the last two look at. Measured on the 7/7 sign book over
+  836 USDT pairs, with a **placebo** that rotates the gate readings between symbols (same
+  thresholds, same average breadth, no information):
+
+  | filter | total | Sharpe | max DD | breadth | losers still traded | placebo (median / best Sharpe) |
+  |---|---|---|---|---|---|---|
+  | none | +1,141% | 0.30 | −93% | 109 | 100% | — |
+  | trend 50 | +2,200% | 0.37 | −87% | 58 | — | — |
+  | trend 100 | **+4,372%** | **0.52** | −91% | 44 | — | — |
+  | trend 200 | +2,675% | 0.49 | −87% | 31 | 72% | −33% / 0.09 |
+  | trend 300 | +2,508% | 0.48 | −83% | 23 | — | — |
+  | peak within −30% | **+177,786%** | **0.90** | −83% | 13 | — | −54% / 0.45 |
+  | peak within −50% | +7,779% | 0.56 | −92% | 21 | 84% | — |
+  | peak within −90% | +1,552% | 0.34 | −93% | 67 | 100% | −31% / 0.07 |
+  | turnover ≥ 1e3 / 1e4 / 1e5 / 1e6 | +758% / +408% / +120% / **−87%** | 0.27 / 0.21 / 0.10 / −0.30 | −89…−96% | 108…21 | 100 / 100 / 94 / 64% | −1% / 0.11 |
+  | volatility ≥ 5% / 10% | +628% / +701% | 0.25 / 0.26 | −89% | 108 / 107 | 100% / 99% | — |
+
+  Three things fall out. (1) **The trend gate is the honest one**: Sharpe 0.30 → 0.49–0.52
+  across a wide plateau (100–300 bars, 50 is too short), drawdown −93% → −83…−91%, it stops
+  trading 72% of the pairs that went on to lose money, it beats its placebo by a mile
+  (−33% median with the readings shuffled), and out of the 2019–21 bull it still helps:
+  over the last five years baseline −65% becomes −39%. It is the same "hold strength, not
+  weakness" idea the repo kept finding, applied per name instead of per book.
+  (2) **Distance from the running peak is stronger but scale-free in a worrying way**: the
+  return rises monotonically as the threshold tightens (−90% → +1,552%, −50% → +7,779%,
+  −30% → +177,786% at Sharpe 0.90), which is a slope, not a plateau, and a tighter gate
+  means a 13–21 name book whose placebo still reaches Sharpe 0.45 — that is small-book luck
+  mixed with a real signal. It is also the only family that turned the recent five years
+  positive (−50% → +19%, −30% → **+1,067%** at Sharpe 0.75), so it carries information worth
+  keeping; treat the threshold as a walk-forward parameter, not a constant. Top-3 pairs are
+  6–19% of the profit in every gated variant (12% ungated), so no single name drives them.
+  (3) **Liquidity filters hurt this rule at every level** (≥1e6 → −87%): the liquid majors
+  are where it loses (`BTC-USDT` is in the loss column) and its winners are illiquid early
+  names (`KCS-USDT` +13,801% while held). That is the *opposite* of what the cross-sectional
+  **ranking** needed, so do not port that filter here — the two rules want different
+  universes, which is only visible because both were measured.
 * **Most pairs lose money; the result is a handful of winners (`--pairs-csv`, per-pair P&L).**
   Attributing every rebalance's money to the pair that earned it (replicating the loop, which
   matches the module to the digit) on the 7/7 USDT book: **518 of 824 pairs lost money (63%)**
@@ -474,6 +516,16 @@ Sharpe 0.38 on 1h.
   five columns of the sweep came out identical. The fix each time was the same: run one rule
   through both the harness and `kcs-backtest` and compare (7/7 on BTC: engine 9.6239x,
   harness 9.6372x once aligned).
+* **A sweep whose columns are all identical is a broken sweep, not a discovery.** Two of my
+  own experiment scripts failed this way while hunting the health filter, and both produced
+  confident tables: (1) the trend-window sweep gave byte-identical results for 50/100/150/
+  200/250/300 bars, because the panels had been built once with `trend_bars=200` and the
+  `GateSpec` window only *selected* which pre-computed series to read — the parameter never
+  reached the data; (2) the "last five years" table showed full-history numbers because the
+  slicing argument was accepted and then ignored. The tell is in the shape of the output:
+  identical figures across a parameter, or a windowed result matching the full one exactly.
+  Rebuild the input for every value you are sweeping, and assert that two configurations
+  actually differ before believing either.
 * **The indicator zoo is one trade in thirty costumes.** Thirty classic indicator rules
   through one harness (signal on a close, held over the next close-to-close move, 0.1% a
   side, long or cash), then twenty of them screened over **529 daily series** with 500+
@@ -580,8 +632,12 @@ liquidity filter is worth about +9 points of median return and nothing more, whi
 to do — the best-looking result in this repository rests on five names chosen
 knowing they survived.
 
-1. Filter the portfolio universe by liquidity/volume instead of "all pairs" —
-   that bias, not the ranking, is what killed the cross-section.
+1. Walk-forward the health-gate thresholds. `--max-below-peak` improves the recent five
+   years most (−50% → +19%, −30% → +1,067%) but has no plateau, so its threshold is a
+   parameter to re-choose per window, not a constant; `--trend-gate` is the plateau one and
+   is the safe default. The old "filter the universe by liquidity" thread is **answered and
+   rejected** for this rule: every turnover floor made it worse (≥1e6 → −87%), because the
+   liquid majors are where it loses and its winners are illiquid early names.
 2. Leave-one-out across the 12 long symbols: how broad is the TSMOM edge really?
 3. Per-symbol spread and slippage instead of a flat 0.1% taker (small pairs are
    worse, and the cross-section is full of them).

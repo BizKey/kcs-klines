@@ -226,6 +226,49 @@ premise, and it is the cleanest statement of why this repository's working rule 
 **time-series** momentum (compare an asset with its own past) and not the **cross-sectional**
 kind (compare assets with each other).
 
+### 1.2b Screening out the dying assets
+
+The universe is a graveyard (§1.2), so the obvious question is whether a filter can refuse
+the names that are going to die. `kcs-portfolio` now takes health gates, every reading taken
+from bars at or before the rebalance date: the close against its own N-bar mean
+(`--trend-gate`), the distance below the pair's own running peak (`--max-below-peak`), a
+median quote-turnover floor and an annualised volatility floor (`--min-turnover`,
+`--min-volatility`). Measured on the 7/7 sign book over 836 USDT pairs, against a placebo
+that rotates the gate readings between symbols — same thresholds, same average breadth,
+zero information:
+
+| filter | total | Sharpe | max DD | breadth | losers still traded | placebo (median / best Sharpe) |
+|---|---|---|---|---|---|---|
+| none | +1,141% | 0.30 | −93% | 109 | 100% | — |
+| trend 100 | **+4,372%** | **0.52** | −91% | 44 | — | — |
+| trend 200 | +2,675% | 0.49 | −87% | 31 | 72% | −33% / 0.09 |
+| peak within −30% | +177,786% | 0.90 | −83% | 13 | — | −54% / 0.45 |
+| peak within −50% | +7,779% | 0.56 | −92% | 21 | 84% | — |
+| turnover ≥ 1e4 | +408% | 0.21 | −90% | 96 | 100% | — |
+| turnover ≥ 1e6 | **−87%** | −0.30 | −96% | 21 | 64% | −1% / 0.11 |
+| volatility ≥ 10% | +701% | 0.26 | −89% | 107 | 99% | — |
+
+**Use the trend gate.** A close above its own 100–200-bar mean is a plateau (100/200/300 bars
+give Sharpe 0.52/0.49/0.48; 50 is too short), it lifts Sharpe from 0.30 to ~0.50, cuts the
+drawdown from −93% to −83…−91%, refuses 72% of the pairs that later lost money, and survives
+the placebo decisively. Out of the 2019–21 bull it still helps: over the last five years the
+ungated book loses 65% and the gated one 39%.
+
+**Distance below the running peak is stronger and more dangerous.** Tightening it improves
+the result monotonically (−90% → +1,552%, −50% → +7,779%, −30% → +177,786% at Sharpe 0.90),
+which is a slope rather than a plateau, and the tighter settings run a 13–21 name book whose
+*placebo* still reaches Sharpe 0.45 — real signal mixed with small-book luck. It is also the
+only family that made the recent five years positive (−50% → +19%, −30% → +1,067% at Sharpe
+0.75), so it is worth keeping as a *quality* condition with the threshold chosen by
+walk-forward, never as a constant fitted here. Top-3 pairs are 6–19% of the profit in every
+gated variant, so none of these results rests on one name.
+
+**Do not filter this rule by liquidity.** Every turnover floor makes it worse, up to −87% at
+≥1e6/bar: the liquid majors are where it loses (`BTC-USDT` is in the loss column) and its
+winners are illiquid early names. That is the opposite of what the cross-sectional *ranking*
+needed (§1.2), so the two rules want different universes — a conclusion that only exists
+because both were measured against the same engine.
+
 ### 1.3 Costs
 
 KuCoin spot VIP0 is not 0.1% for everyone: class A is 0.1/0.1% maker/taker, class
@@ -806,11 +849,18 @@ treat any single multiple as noise until a walk-forward agrees with it.
 ## 8. Reproducing the headline numbers
 
 ```bash
-uv run pytest                          # 376 tests, ~26 s
+uv run pytest                          # 413 tests, ~28 s
 
 # one asset
 uv run kcs-backtest --symbol BTC-USDT --strategy tsmom \
     --param lookback=720 --param rebalance=168
+
+# the whole archive as one book, with the health gates on the dying names
+uv run kcs-portfolio --timeframe 1d --lookback 7 --rebalance 7 --select sign \
+    --trend-gate 200 --pairs-csv analysis/out/gated.csv
+
+# the same book without them, which is what the tables in §1.2b compare against
+uv run kcs-portfolio --timeframe 1d --lookback 7 --rebalance 7 --select sign
 
 # a basket of named assets: combined curve, CSV, SVG chart and JSON
 uv run kcs-basket --symbols BTC-USDT,ETH-USDT,SOL-USDT,XRP-USDT,BNB-USDT --json
@@ -848,3 +898,15 @@ for symbol, timeframe in data.available_series("data/kucoin/spot"):
 Four shells in parallel finish the 4,434 series in about two and a half minutes
 (`/dev/shm` is not writable in some sandboxes, so `multiprocessing` is not an
 option there; shard the list instead).
+
+**The gate experiment and its placebo.** The tables in §1.2b come from a throwaway script
+that built the panels once and then, for each configuration, ran the same book through
+`run_portfolio(gates=...)`; the placebo repeated each run with the `gates` readings rotated
+between symbols (`random.Random(seed).shuffle` over the panels' gate lists), which keeps the
+thresholds and the average breadth identical while removing all information. Three details
+worth copying if you redo it: rebuild the panels for every gate *window* you sweep (a
+`GateSpec` only selects which pre-computed series to read, so a window sweep over one panel
+set returns identical columns), carry the sliced date list into `build_panel` as well as into
+`run_portfolio` when you test a sub-period, and report the *share of the baseline's losing
+pairs that are still traded* — that is the number that says whether a filter screens death or
+merely shrinks the book.

@@ -18,7 +18,7 @@ uv run kcs-backtest --strategy tsmom --param lookback=30 --param rebalance=7 \
     --dd-scale 10,40,25                           # cut size while the account is in drawdown
 uv run kcs-riskparity --top 5 --min-history 3y --vol-budget 0.4   # a de-risked book
 uv run kcs-journal verify        # re-check what was recorded
-uv run pytest                    # 364 tests
+uv run pytest                    # 413 tests
 ```
 
 `analysis` is a [uv](https://docs.astral.sh/uv/) workspace member: the root
@@ -138,6 +138,18 @@ uv run kcs-portfolio --timeframe 1d --lookback 30 --rebalance 30 --select sign -
 * `--select rank` (the default) takes a slice of the sorted cross-section: `--top`
   is a fraction below 1 or an absolute count at 1 or more. It holds the same number
   of names whatever the market does.
+* **Health gates refuse the names that are about to die**, all read from bars at or before
+  the rebalance date: `--trend-gate N` (close at or above its own N-bar mean; **100–200 works
+  and the plateau is wide**), `--max-below-peak P` (drop names more than P below their own
+  running peak), `--min-turnover X` (median quote turnover per bar) and `--min-volatility P`
+  (annualised floor — this is what removes dead-calm stablecoins), with `--gate-window` for
+  the bars the last two look at. Measured on the 7/7 sign book: the trend gate takes Sharpe
+  from 0.30 to ~0.50 and the drawdown from −93% to −87% while trading only 31–44 names, and a
+  placebo with the same thresholds but shuffled readings gives a median of −33%, so the gate
+  knows something. A tight `--max-below-peak 30%` looks spectacular (+177,786%, Sharpe 0.90)
+  but runs 13 names and has no plateau — treat it as a walk-forward parameter. **A turnover
+  floor makes this rule worse at every level** (≥1e6 → −87%): its winners are illiquid early
+  names, so liquidity is the wrong filter here even though the ranking needed it.
 * **`--quote` decides which pairs are in the universe at all.** The default is
   **`USDT`**: only pairs settled in tether, because a cross pair like `ADA-BTC` is a
   different bet — its price is a ratio of two crypto assets, so the dollar move cancels out
