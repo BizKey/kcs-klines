@@ -19,10 +19,23 @@ journal/
 
 ```bash
 uv run kcs-backtest --strategy sma-rev --journal --note "why I ran this"
+uv run kcs-basket --symbols BTC-USDT,ETH-USDT --strategy sma --param window=200 \
+    --journal --note "the pair, not the single series"
 ```
 
 `--journal` alone writes into this directory; `--journal some/other/dir` puts it
 elsewhere. Recording is explicit: nothing is written unless you ask for it.
+
+**Basket runs are first class.** `kcs-basket --journal` writes `kind: "basket"`, one
+`legs.<symbol>` window (bars, first, last, digest, the data audit) per pair instead of a
+single `data` window, the `window` the reported stretch was cut with, and — when
+`--spread-model` charged each leg its own estimated spread — the `leg_costs` that were
+actually used, stored rather than re-derived, so a later estimate from a grown archive
+cannot silently change what the entry is checked against. The run id is built from the
+timestamp, the timeframe and the leg count (`…-basket-1d-10legs`) so it is easy to type
+into `--id`. Verification re-runs every leg and compares the combined curve, the benchmark
+and each leg's numbers; a basket has no single per-trade table, so `--keep-trades` is not
+offered there.
 
 ## Reading it
 
@@ -46,6 +59,8 @@ uv run kcs-journal verify --last 5   # or just the newest few
 | `data.bars`, `data.first`, `data.last` | the exact window that was evaluated |
 | `data.digest` | SHA-256 over the OHLCV values of that window |
 | `data.gaps`, `data.missing_bars`, `data.bars_violating_ohlc` | the audit the run saw |
+| `kind` | `backtest` (one series) or `basket` (several legs) |
+| `legs` / `window` / `leg_costs` | a basket's per-leg windows, the reported stretch, and its per-leg costs |
 | `metrics` | everything the engine reported, including `bookkeeping_error` |
 | `note` | your own words about why the run happened |
 | `trades_file` | the per-trade table, when `--keep-trades` was used |

@@ -171,6 +171,23 @@ def pick_best(scored: list[tuple[dict, metrics.Performance]], metric: str) -> in
     return max(range(len(scored)), key=lambda i: getattr(scored[i][1], metric))
 
 
+def _walkforward_or_exit(bars, args, grid):
+    """The run, with the spot account's refusal turned into a message rather than a traceback."""
+    return run_walkforward(
+        bars,
+        args.strategy,
+        grid,
+        args.timeframe,
+        train=args.train,
+        test=args.test,
+        step=args.step,
+        metric=args.metric,
+        costs=Costs(fee_per_side=args.fee, slippage_per_side=args.slippage),
+        label=f"{args.symbol} {args.timeframe} {args.strategy}",
+        allow_short=args.allow_short,
+    )
+
+
 def run_walkforward(
     bars: list[Bar],
     strategy_name: str,
@@ -183,6 +200,7 @@ def run_walkforward(
     metric: str = "sharpe",
     costs: Costs | None = None,
     label: str | None = None,
+    allow_short: bool = False,
 ) -> WalkForwardResult:
     """Roll a parameter choice forward and stitch the out-of-sample windows."""
     if metric not in METRICS:
@@ -209,7 +227,8 @@ def run_walkforward(
             strategy = get_strategy(strategy_name, **params)
             history = bars[: split.train_end]
             run = engine.run_backtest(
-                history, strategy.targets(history), timeframe, costs, label=strategy.slug, strict=True
+                history, strategy.targets(history), timeframe, costs, label=strategy.slug,
+                strict=True, spot_only=not allow_short,
             )
             segment = slice_equity(run.equity, split.train_start, split.train_end)
             scored.append((params, metrics.performance(segment, per_year)))
@@ -220,7 +239,8 @@ def run_walkforward(
         strategy = get_strategy(strategy_name, **params)
         history = bars[: split.test_end]
         run = engine.run_backtest(
-            history, strategy.targets(history), timeframe, costs, label=strategy.slug, strict=True
+            history, strategy.targets(history), timeframe, costs, label=strategy.slug,
+            strict=True, spot_only=not allow_short,
         )
         test_segment = slice_equity(run.equity, split.train_end, split.test_end)
         test_performance = metrics.performance(test_segment, per_year)
@@ -377,6 +397,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--timeframe", default="1h")
     parser.add_argument("--strategy", default="sma", choices=available())
     parser.add_argument(
+        "--allow-short",
+        action="store_true",
+        help="let the strategy take short exposure; by default the harness refuses it, because "
+             "a spot account cannot hold a negative balance",
+    )
+    parser.add_argument(
         "--grid",
         action="append",
         default=[],
@@ -408,18 +434,10 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     bars = data.load_series(args.data_dir, args.symbol, args.timeframe)
-    result = run_walkforward(
-        bars,
-        args.strategy,
-        grid,
-        args.timeframe,
-        train=args.train,
-        test=args.test,
-        step=args.step,
-        metric=args.metric,
-        costs=Costs(fee_per_side=args.fee, slippage_per_side=args.slippage),
-        label=f"{args.symbol} {args.timeframe} {args.strategy}",
-    )
+    try:
+        result = _walkforward_or_exit(bars, args, grid)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from None
     print(f"loaded {len(bars):,} bars from {args.data_dir / args.symbol / args.timeframe}")
     print(render(result, bars))
 

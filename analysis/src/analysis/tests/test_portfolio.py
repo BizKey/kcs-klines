@@ -957,3 +957,29 @@ def test_sizing_down_pays_commission_and_the_orders_are_validated():
     )
     assert sized.fees_paid > 0
     assert len(sized.vol_scales) == len(sized.rebalances)
+
+
+def test_a_panel_that_does_not_match_the_dates_is_refused():
+    """A sliced date list with full-history panels lines up positionally and lies.
+
+    This is how a walk-forward script of mine produced five identical years: the panels were
+    sampled on the whole grid, the dates were sliced to a window, and every index silently
+    read the wrong bar. The guard turns that into an error.
+    """
+    panels, dates = rise_then_fall_panels()
+    with pytest.raises(ValueError, match="different rebalance grid"):
+        portfolio.run_portfolio(
+            panels, dates[2:], lookback=30, rebalance=30, select_mode="sign",
+            costs=Costs(0), label="sliced",
+        )
+    # a panel built for the sliced grid is fine
+    window = dates[2:]
+    rebuilt = [
+        portfolio.build_panel(*series([0.01] * 500), panel.symbol, window, 30 * STEP)
+        for panel in panels
+    ]
+    result = portfolio.run_portfolio(
+        rebuilt, window, lookback=30, rebalance=30, select_mode="sign",
+        costs=Costs(0), label="rebuilt",
+    )
+    assert len(result.equity) == len(window)

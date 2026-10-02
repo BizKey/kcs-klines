@@ -45,7 +45,7 @@ import json
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from . import Costs, data, engine, metrics, report
+from . import Costs, data, engine, impact, journal, metrics, portfolio, report, spreads
 from .data import Bar, iso
 from .metrics import Performance, cagr, pct
 from .run_backtest import parse_params
@@ -217,6 +217,9 @@ def run_basket(
     window: int | None = None,
     window_text: str | None = None,
     since: int | None = None,
+    costs_by_symbol: dict[str, Costs] | None = None,
+    liquid: dict[str, dict[int, bool]] | None = None,
+    allow_short: bool = False,
 ) -> BasketResult:
     """Run one strategy on every leg and combine the curves at fixed weights.
 
@@ -225,6 +228,14 @@ def run_basket(
     window's *start* instead, which is what a walk-forward needs — one stretch at a time.
     The legs are still run over their whole history, so their signals are the ones they
     really had: only the reported window moves.
+
+    `costs_by_symbol` overrides `costs` for the symbols it names, which is how an estimated
+    per-pair spread gets charged to the pair that pays it instead of to the average.
+
+    `liquid` is a per-symbol map of bar time to "this pair was still worth trading then".
+    A leg whose mask is off at a bar is forced flat on that bar, so a pair that goes quiet
+    while the book holds it stops being held — the selection chose it because it *was* liquid,
+    and that is not a reason to keep it.
     """
     if not series:
         raise ValueError("a basket needs at least one symbol")
@@ -262,17 +273,27 @@ def run_basket(
     for symbol, bars in series.items():
         # History before the window is what warms the indicators up; nothing after
         # its end is read at all, so no leg can see past the window.
+        leg_costs = (costs_by_symbol or {}).get(symbol, costs)
         windowed = [bar for bar in bars if bar.time <= last]
         index = {bar.time: i for i, bar in enumerate(windowed)}
         start_index = index[timeline[0]]
         strategy = get_strategy(strategy_name, **params)
+        targets = strategy.targets(windowed)
+        mask = (liquid or {}).get(symbol)
+        if mask:
+            targets = [
+                value if mask.get(bar.time, True) else 0.0
+                for bar, value in zip(windowed, targets)
+            ]
         run = engine.run_backtest(
             windowed,
-            strategy.targets(windowed),
+            targets,
             timeframe,
-            costs,
+            leg_costs,
             label=symbol,
             strict=strict,
+            exit_prices=strategy.intrabar_exits(windowed),
+            spot_only=not allow_short,
         )
 
         slice_ = [index[moment] for moment in timeline]
@@ -299,7 +320,7 @@ def run_basket(
         # basket starts later, so they are restated against the capital the leg
         # actually had when the window opened — otherwise a leg that was already
         # up before the window looks like it paid more than it did.
-        fee = engine.fees_in_window(run, costs.rate, start_index) / base if base > 0 else 0.0
+        fee = engine.fees_in_window(run, leg_costs.rate, start_index) / base if base > 0 else 0.0
         legs.append(
             Leg(
                 symbol=symbol,
@@ -318,7 +339,9 @@ def run_basket(
         # the same rule as `engine.buy_and_hold`, on the window instead of on the
         # whole series, which is what keeps a listing bar out of it.
         leg_bars = [windowed[i] for i in slice_]
-        bench_curves.append(engine.buy_and_hold_bars(leg_bars, timeframe, costs).equity)
+        bench_curves.append(
+            engine.buy_and_hold_bars(leg_bars, timeframe, leg_costs).equity
+        )
         if legs[-1].open_at_end:
             warnings.append(f"{symbol}: the leg is still in the market at the end of the window")
 
@@ -567,20 +590,53 @@ def write_metrics(path: Path, result: BasketResult, *, include_curves: bool = Fa
 # --- CLI --------------------------------------------------------------------
 
 
+def liquidity_mask(
+    times: list[int], turnover: list[float], *, minimum: float, window: int
+) -> dict[int, bool]:
+    """Which bars of a leg were still liquid enough to hold, decided from bars up to that one.
+
+    The reading is the median turnover of the `window` bars ending at the bar in question, so a
+    pair that goes quiet is dropped after `window` bars of quiet, and one that comes back is
+    picked up again. Bars with no reading at all count as illiquid: the point is to refuse to
+    hold what cannot be checked.
+    """
+    import statistics as st
+
+    mask: dict[int, bool] = {}
+    recent: list[float] = []
+    for moment, value in zip(times, turnover):
+        # the window holds *bars*, zero turnover included: a pair that stops trading must
+        # lose the reading (or a dead pair would keep a stale "liquid" verdict forever),
+        # while a single missing bar barely moves a median.
+        recent.append(value if value and value > 0 else 0.0)
+        if len(recent) > window:
+            recent.pop(0)
+        mask[moment] = bool(len(recent) >= window and st.median(recent) >= minimum)
+    return mask
+
+
+def _cost_model_text(args) -> str:
+    """What the printed cost table is made of, so a number can never be quoted without it."""
+    parts = []
+    if args.spread_model != "none":
+        parts.append(
+            f"corwin-schultz half-spreads on {args.spread_timeframe} bars "
+            f"(last {args.spread_window})"
+        )
+    if args.capital is not None:
+        parts.append(
+            f"impact at ${args.capital:,.0f} of capital with coefficient "
+            f"{args.impact_coefficient}"
+        )
+    return ", ".join(parts) if parts else "no extra models"
+
+
 def _parse_day(text: str | None, flag: str) -> int | None:
     """An ISO date (`2024-10-01`) as a UTC midnight epoch second."""
-    if not text:
-        return None
-    import datetime as dt
-
     try:
-        return int(
-            dt.datetime.strptime(text, "%Y-%m-%d")
-            .replace(tzinfo=dt.timezone.utc)
-            .timestamp()
-        )
+        return data.parse_date(text, flag)
     except ValueError as exc:
-        raise SystemExit(f"{flag} wants an ISO date like 2024-10-01, got {text!r}") from exc
+        raise SystemExit(str(exc)) from exc
 
 
 def _try_series(data_dir: Path | str, symbol: str, timeframe: str):
@@ -695,11 +751,71 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         metavar="DATE",
         help="end the reported window here (default: the newest bar every leg shares)",
     )
+    parser.add_argument(
+        "--spread-model",
+        choices=spreads.SPREAD_MODELS,
+        default="none",
+        help="charge each leg the spread it actually has, estimated from its own bars "
+             "instead of assuming the flat fee covers everything (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--capital",
+        type=float,
+        default=None,
+        metavar="USD",
+        help="account size: charge each leg the market impact of *your* order, "
+             "estimated as coefficient * per-bar volatility * sqrt(order / turnover)",
+    )
+    parser.add_argument(
+        "--impact-coefficient",
+        type=float,
+        default=impact.DEFAULT_COEFFICIENT,
+        help="the square-root coefficient (literature band is roughly 0.1-1; "
+             "default: %(default)s)",
+    )
+    parser.add_argument(
+        "--min-turnover-now",
+        type=float,
+        default=0.0,
+        metavar="USD",
+        help="stop holding a pair once its recent turnover falls below this (0 = never); "
+             "the selection picked it when it was liquid, which is no reason to keep it",
+    )
+    parser.add_argument(
+        "--turnover-window", type=int, default=30, metavar="BARS",
+        help="bars the recent-turnover reading looks back over (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--spread-timeframe",
+        default="1h",
+        help="bars the spread is measured on: a daily high-low range is mostly volatility, "
+             "not spread, so this wants the finest series available (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--spread-window", type=int, default=500, metavar="BARS",
+        help="how many bars of that series to measure over (default: %(default)s)",
+    )
     parser.add_argument("--fee", type=float, default=0.001, help="commission per side (default: %(default)s)")
     parser.add_argument("--slippage", type=float, default=0.0, help="extra cost per side (default: %(default)s)")
     parser.add_argument("--data-dir", type=Path, default=DATA_DIR, help="root of the parquet archive")
     parser.add_argument("--out-dir", type=Path, default=OUT_DIR)
     parser.add_argument("--no-artifacts", action="store_true", help="print only, write nothing")
+    parser.add_argument(
+        "--journal",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="DIR",
+        help="also append the run to the journal (default: journal/ next to the repo root), "
+             "so it can be re-run and checked later with kcs-journal verify",
+    )
+    parser.add_argument(
+        "--allow-short",
+        action="store_true",
+        help="let the legs take short exposure; by default the tool refuses it, because a "
+             "spot account cannot hold a negative balance",
+    )
+    parser.add_argument("--note", default="", help="a human note for the journal entry")
     parser.add_argument("--json", action="store_true", help="also write the summary as JSON")
     parser.add_argument("--json-curves", action="store_true", help="include every curve in that JSON")
     return parser.parse_args(argv)
@@ -761,6 +877,93 @@ def main(argv: list[str] | None = None) -> int:
             raise SystemExit("--symbols is required unless --select-turnover is given")
         symbols = pool
     params = parse_params(args.param, args.strategy)
+    # Every model that charges a leg more than the flat fee adds to the same per-leg number,
+    # so the table printed below is one breakdown rather than one table per model.
+    extra_per_side: dict[str, float] = {}
+    notes: list[str] = []
+
+    if args.spread_model != "none":
+        measured: dict[str, float] = {}
+        for symbol in symbols:
+            try:
+                spread_bars = data.load_series(args.data_dir, symbol, args.spread_timeframe)
+            except FileNotFoundError:
+                continue
+            value = spreads.corwin_schultz(
+                spread_bars, window=args.spread_window, before=since
+            )
+            if value is not None:
+                measured[symbol] = value
+        missing = [symbol for symbol in symbols if symbol not in measured]
+        if missing:
+            notes.append(f"no spread estimate for {', '.join(missing)} (they pay the flat fee)")
+        for symbol, value in measured.items():
+            extra_per_side[symbol] = extra_per_side.get(symbol, 0.0) + value / 2.0
+
+    if args.capital is not None:
+        if args.capital <= 0:
+            raise SystemExit("--capital wants a positive account size in USD")
+        weight = 1.0 / len(symbols)
+        for symbol in symbols:
+            try:
+                times, closes, turnover = portfolio.read_closes(
+                    args.data_dir, symbol, args.timeframe, with_volume=True
+                )
+            except FileNotFoundError:
+                continue
+            stats = impact.leg_market_stats(times, closes, turnover, before=since)
+            if stats is None:
+                notes.append(f"{symbol}: no market stats, so no impact charged")
+                continue
+            per_bar, sigma = stats
+            share = impact.participation(weight * args.capital, per_bar)
+            value = impact.impact_fraction(
+                weight * args.capital, per_bar, sigma,
+                coefficient=args.impact_coefficient,
+            )
+            if value is None:
+                continue
+            extra_per_side[symbol] = extra_per_side.get(symbol, 0.0) + value
+            if share and share >= 0.1:
+                notes.append(
+                    f"{symbol}: your ${weight * args.capital:,.0f} order is {share:.0%} of one "
+                    f"{args.timeframe} bar — that is days of the pair's volume, not one trade"
+                )
+
+    costs_by_symbol: dict[str, Costs] = {
+        symbol: Costs(
+            fee_per_side=args.fee + extra, slippage_per_side=args.slippage
+        )
+        for symbol, extra in extra_per_side.items()
+    }
+    if costs_by_symbol:
+        charged = {symbol: extra for symbol, extra in extra_per_side.items()}
+        print(f"cost model: fee {args.fee*1e4:.2f}bp per side plus "
+              f"{_cost_model_text(args)}")
+        print(f"   {'symbol':<16}{'per side':>10}{'round trip':>12}{'over the flat fee':>19}")
+        for symbol, extra in sorted(charged.items(), key=lambda row: -row[1]):
+            total = args.fee + extra
+            print(f"   {symbol:<16}{total*1e4:>8.2f}bp{2*total*1e4:>10.2f}bp"
+                  f"{extra*1e4:>16.2f}bp")
+    for note in notes:
+        print(f"note: {note}")
+
+    liquid: dict[str, dict[int, bool]] = {}
+    if args.min_turnover_now > 0:
+        for symbol in symbols:
+            try:
+                times, _closes, turnover = portfolio.read_closes(
+                    args.data_dir, symbol, args.timeframe, with_volume=True
+                )
+            except FileNotFoundError:
+                continue
+            liquid[symbol] = liquidity_mask(
+                times, turnover, minimum=args.min_turnover_now, window=args.turnover_window
+            )
+        if liquid:
+            print(f"liquidity rule: a leg is held only while its median turnover over the "
+                  f"last {args.turnover_window} bars is at least "
+                  f"${args.min_turnover_now:,.0f}")
 
     series: dict[str, list[Bar]] = {}
     for symbol in symbols:
@@ -786,11 +989,26 @@ def main(argv: list[str] | None = None) -> int:
             window=window,
             window_text=args.last,
             since=since,
+            costs_by_symbol=costs_by_symbol or None,
+            liquid=liquid or None,
+            allow_short=args.allow_short,
         )
     except ValueError as exc:
         raise SystemExit(str(exc)) from None
 
     print(render(result))
+    if args.journal is not None:
+        directory = journal.journal_dir_for(args.journal)
+        entry = journal.basket_entry_for(
+            result, series, args.timeframe,
+            window={"seconds": window, "text": args.last, "since": since, "until": until},
+            costs_by_symbol=costs_by_symbol or None,
+            note=args.note,
+        )
+        path = journal.append(entry, directory)
+        print(f"journalized {entry.run_id} -> {path}")
+        print(f"            verify later with: uv run kcs-journal verify --id {entry.run_id}")
+
     if args.no_artifacts:
         return 0
 

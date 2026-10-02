@@ -16,8 +16,11 @@ place is, and what has already been learned the hard way.
   that decide an outcome, what was tested and rejected, the mistakes this project
   made and fixed, what is not modelled, and what to do next. Read it before acting
   on any number from this repository.
-* **`journal/`** — append-only JSONL run records, **tracked in git on purpose**.
-  Currently empty: the human records their own runs there.
+* **`journal/`** — append-only JSONL run records, **tracked in git on purpose**. It holds
+  one entry: the recommended configuration from `CONCLUSIONS.md` §1.4-1.5a, recorded by
+  `kcs-basket --journal` (a *basket* entry: per-leg windows and digests, the reported window,
+  and the per-leg spread costs), re-checkable with
+  `uv run kcs-journal verify --id 20261002T081142Z`.
 * `data/` (1.4 GB, **998 symbols / 4,990 series** — every symbol now has all five
   timeframes, gitignored) is the archive. It is
   **alive**: a collector run can append bars while you are working. Two things to know
@@ -36,7 +39,7 @@ place is, and what has already been learned the hard way.
 | `src/` | Rust collector: `kucoin/client.rs`, `storage/parquet_store.rs`, `collector.rs`, `verify.rs`, `status.rs` |
 | `tests/` | Rust tests; `live_api.rs` is `--ignored` and hits the real exchange |
 | `analysis/src/analysis/` | `data.py` `metrics.py` `engine.py` `report.py` `journal.py` `walkforward.py` `portfolio.py` `basket.py` `riskparity.py` `run_backtest.py`, `strategies/`, `tests/` |
-| `analysis/src/analysis/tests/` | 423 pytest tests (engine invariants, registry-wide strategy checks, CLI, journal, walk-forward, portfolio, basket, real-data regression) |
+| `analysis/src/analysis/tests/` | 466 pytest tests (engine invariants, registry-wide strategy checks, CLI, journal, walk-forward, portfolio, basket, real-data regression) |
 | `analysis/out/` | artifacts (CSV/JSON/SVG), gitignored |
 | `analysis/README.md` | the toolkit in detail; `journal/README.md` the journal format |
 | root `README.md` | the collector in detail (KuCoin API traps, schema, scheduling) |
@@ -46,9 +49,11 @@ place is, and what has already been learned the hard way.
 ```bash
 cargo test && cargo clippy --all-targets      # Rust
 uv sync                                       # Python env (installs the analysis member)
-uv run pytest                                 # 423 tests, ~32 s
-uv run kcs-backtest --list                    # 16 registered strategies + their parameters
+uv run pytest                                 # 466 tests, ~35 s
+uv run kcs-backtest --list                    # 19 registered strategies + their parameters
 uv run kcs-backtest --strategy tsmom --param lookback=720 --param rebalance=168
+uv run kcs-backtest --symbol BTC-USDT --last 5y --strategy stops-sma --param window=200 --param stop_loss=0.10 --param cooldown=5
+uv run kcs-backtest --symbol BTC-USDT --last 5y --strategy sma-ls    # refused: a spot account cannot short (`--allow-short` overrides)
 uv run kcs-backtest --symbol BTC-USDT --last 1y   # only the last year, warm history
 uv run kcs-basket --symbols BTC-USDT,ETH-USDT,SOL-USDT,XRP-USDT,BNB-USDT
 uv run kcs-riskparity --top 5 --min-history 3y --vol-budget 0.4
@@ -61,6 +66,11 @@ uv run kcs-portfolio --timeframe 1d --lookback 30 --rebalance 30 --select sign -
 uv run kcs-portfolio --timeframe 1d --lookback 7 --rebalance 7 --select sign --trend-gate 200
 uv run kcs-portfolio --timeframe 1d --lookback 7 --rebalance 7 --select sign --trend-gate 200 --vol-target 25%
 uv run kcs-basket --select-turnover 10 --timeframe 1d --strategy voltarget-sma --param window=50 --param target_vol=0.30 --last 5y
+uv run kcs-basket --select-turnover 10 --timeframe 1d --strategy voltarget-sma --param window=50 --param target_vol=0.30 --last 5y --spread-model corwin-schultz
+uv run kcs-basket --select-turnover 10 --timeframe 1d --strategy voltarget-sma --param window=50 --param target_vol=0.30 --last 5y --spread-model corwin-schultz --journal
+uv run kcs-journal verify --id 20261002T081142Z     # the recorded winner, re-run and compared
+uv run kcs-basket --select-turnover 10 --timeframe 1d --strategy voltarget-sma --param window=50 --param target_vol=0.30 --last 5y --capital 60000
+uv run kcs-basket --select-turnover 10 --timeframe 1d --strategy voltarget-sma --param window=50 --param target_vol=0.30 --last 5y --min-turnover-now 300000
 ```
 
 ## Invariants — break these and the numbers become lies
@@ -83,7 +93,16 @@ uv run kcs-basket --select-turnover 10 --timeframe 1d --strategy voltarget-sma -
    `test_targets_never_peek_at_later_bars` checks every registered strategy by
    rewriting one bar and asserting earlier targets did not move. It samples bars
    on purpose — a full sweep is O(n²) and took 200 s.
-5. **Benchmarks.** `buy_and_hold` enters at the **second** bar's open, not the
+5. **Spot means long or flat, never short.** A spot balance cannot go below zero, so a
+   negative exposure is not a risk preference — it is an instrument the account does not have.
+   `kcs-backtest`, `kcs-basket` and `kcs-walkforward` therefore **refuse** a strategy whose
+   targets go negative, and say so instead of quietly shorting: pass `--allow-short` to run it
+   anyway. The long/short variants are named with an `-ls` suffix (`sma-ls`, `breakout-ls`,
+   `voltarget-sma-ls`, …) and one test checks that **every strategy without that suffix is
+   long-only** on bars that rise and then fall, so the convention is enforced rather than
+   assumed. `kcs-portfolio --mode` defaults to `long-only`; `kcs-riskparity` never shorts. Every
+   number recommended anywhere in this repository was produced under that guard.
+6. **Benchmarks.** `buy_and_hold` enters at the **second** bar's open, not the
    first's: `targets[0]` never trades, so `open[1]` is the earliest price any
    strategy can be filled at, and a benchmark entered at `open[0]` is credited
    with the first bar's move. On a listing bar that move *is* the result — PYTH's
@@ -142,12 +161,23 @@ uv run kcs-basket --select-turnover 10 --timeframe 1d --strategy voltarget-sma -
   `on_decision_grid`. Routing the every-bar case through the grid machinery would
   silently change what an unaligned series (calendar months, say) does, and the
   default is pinned by the regression suite.
+* **A panel is positional, and `run_portfolio` now checks it.** `Panel.closes` and
+  `.momentum` are indexed by the rebalance date list the panel was sampled on, so passing a
+  *sliced* date list with full-history panels reads the wrong bars and returns a confident
+  curve for a window that was never measured — exactly how a walk-forward script of mine
+  produced five byte-identical years. `build_panel` now records the grid it used and
+  `run_portfolio` refuses a mismatch by name; `kcs-portfolio --from/--to` rebuilds the panels
+  for the window, which is why the CLI was right while the script was not.
 * **Test fixtures must use grid-aligned timestamps** (`conftest.START =
   1_507_161_600`). TSMOM decides on an absolute epoch grid, so an unaligned
   synthetic series would never rebalance.
 * **Journal entries record the window they evaluated**, so they stay verifiable
   after the archive grows; `verify` re-runs and compares every metric plus the
-  per-trade table row by row, and exits non-zero on any difference.
+  per-trade table row by row, and exits non-zero on any difference. A **basket** entry
+  (`kcs-basket --journal`, `kind: "basket"`) stores a window *per leg* plus the reported
+  stretch (`window`) and — when `--spread-model` was used — the per-leg costs it charged, so
+  verification replays exactly what ran instead of re-deriving a spread from a grown archive.
+  Its `run_id` is `…-basket-<timeframe>-<n>legs` because a basket's label has spaces in it.
 
 ## What has been learned empirically
 
@@ -169,7 +199,16 @@ section that proves it. BTC-USDT, 0.1%/side, 2017-10 … 2026-09 unless noted.
 > compounded return is **+75.9%**, no year loses more than **−7.85%**, the worst drawdown is
 > **−15.3%**, and the passive hold of the same names compounds to **−52.4%** over the same five
 > stretches. It loses to the passive in the two strongest bull years and wins the disasters;
-> re-selecting the names every year does not help (it costs ~15 points against choosing once)
+> re-selecting the names every year does not help (it costs ~15 points against choosing once).
+>
+> **The high-return branch is the sized wide book with a rolling drawdown gate**: 840 USDT
+> pairs, sign 7/7, trend gate 200, `--vol-target 25%`, and `--max-below-peak` **re-chosen on the
+> prior two years only** — five positive years, compounded **+612%**, worst year −38%, in the
+> market ~51% (§1.5c). It beats the basket on return and loses badly on drawdown. Its own
+> placebo — the same thresholds with the readings rotated between symbols, so the book size is
+> the same (194 vs 207 names, 739 vs 747) — compounds to **−67.4%**, so the gate is carrying
+> information rather than just buying fewer names. The one discount left is the archive itself:
+> it has no delistings, which flatters any drawdown gate and an 840-name book especially (§4).
 
 ### The landscape, on comparable windows
 
@@ -195,13 +234,26 @@ section that proves it. BTC-USDT, 0.1%/side, 2017-10 … 2026-09 unless noted.
   liquid pairs, −45% on 836 pairs. Liquidity *filtering* helps a cross-sectional ranking and
   actively hurts the sign rule (§1.2, §1.3, §1.5).
 * **Sizing is the strongest single knob on a book.** A 25% volatility target took the gated
-  wide book from Sharpe 0.49 to 0.73 and its drawdown from −86.8% to −53.8%; on the basket it
-  is the difference between Sharpe 0.42 and 0.99 (§1.4–1.5).
+  wide book from Sharpe 0.49 to 0.73, its drawdown from −86.8% to −53.8%, and — across five
+  separate yearly windows — from **−62.1% compounded to +46.9%**, beating the passive hold of
+  the same 840 pairs (−36.8%) by 84 points (§1.5b). On the basket it is the difference between
+  Sharpe 0.42 and 0.99 (§1.4–1.5). It is *nearly all* of the work the gates are credited with:
+  the trend gate helps in one of the five years and hurts in the others.
+* **Narrow beats wide, but the wide book is not dead once sized.** Over the same five yearly
+  windows: the ten busiest pairs with the same rule compound to **+75.9%** (worst year −7.85%,
+  worst drawdown −15.3%), the sized 840-pair book to **+46.9%** (worst year −20.1%, drawdown
+  −46.1%). The earlier "a thousand pairs is the wrong shape" was measured without sizing and
+  is too strong — the wide book beats its own benchmark, it is just dominated (§1.5b).
 * **Never rebalance a five-name trend book monthly.** `kcs-riskparity`'s version returns +50%
   at Sharpe 0.19 where the fixed-weight basket returns +127% at 0.99 — re-equalising averages
   down into the weakest leg (§1.5, §1.9).
-* **Costs decide everything on hourly bars**, and fee fragility is brutal: the wide 7/7 book
-  halves its result per extra 0.1% per side (§1.6).
+* **Costs decide everything — on the strategy that trades a lot.** The wide 7/7 book halves its
+  result for every extra 0.1% per side (§1.6); the winning basket, which holds ten liquid pairs
+  ~18% of the time, still returns +58% at Sharpe 0.61 when the fee is **five times** the
+  modelled 0.1%, and charging each leg its own estimated spread (`--spread-model
+  corwin-schultz`, hourly bars) costs it 0.04 Sharpe (+91.4% → +86.1%, §1.6a). Estimate spreads
+  on the finest series available: the same estimator reads BTC at 30 bp on daily bars and
+  5.6 bp on hourly ones.
 * **Trend following on liquid survivors is the only thing that survived** across markets, and
   its positive mean is a handful of assets — leave-one-out removes most of the multiple
   (§1.7–1.8).
@@ -209,16 +261,57 @@ section that proves it. BTC-USDT, 0.1%/side, 2017-10 … 2026-09 unless noted.
   (§1.9), as long as the names are chosen by a rule and not rebalanced away.
 * **The filter for dying assets is distance from the pair's own high, not liquidity.** The
   trend gate lifts Sharpe from 0.30 to ~0.50 and refuses 72% of the pairs that later lost;
-  a turnover floor makes the same rule worse at every level, up to −87% (§1.3).
+  a turnover floor makes the same rule worse at every level, up to −87% (§1.3). The
+  distance-from-peak gate has **no plateau**, so a fixed threshold is meaningless — but
+  re-choosing it on the previous two years only, then applying it to the next year, is stable
+  (−50% once, −30% four times), gives five positive years and compounds to **+612%** against
+  **+47%** for the same rule without it and **+23%** with a fixed −90% (§1.5c). The value is in
+  the re-choosing, and **the placebo confirms it is information rather than churn**: rotating
+  the readings between symbols at the same book size (194 vs 207 names, 739 vs 747) compounds
+  to **−67.4%** and loses in four of five years, so §1.3's "half of it is just a smaller book"
+  was too cautious once sizing is in the mix. What still stands is §4's caveat: no delistings
+  in this archive flatters any drawdown gate, and an 840-name book most of all.
+* **Take-profit and stop-loss exits cost money and buy nothing — and the intrabar convention
+  is what settles it.** `stops-sma` / `stops-breakout` / `voltarget-stops-sma` wrap any signal,
+  and `engine.run_backtest(..., exit_prices=...)` fills a level **inside the bar** when the
+  strategy reports one through `intrabar_exits`. The stated convention (bars cannot say whether
+  the high or the low came first): **the stop wins if both levels are touched**, it fills at the
+  level, a gap through it fills at the open, a gap in your favour does not. Read that way:
+  on BTC daily a 10% stop on SMA200 turns +221% into +195% and the drawdown from −36% to −41%;
+  a 15% trail on the same rule gives +56% at Sharpe 0.26; the daily **breakout reverses** —
+  the stop that *helped* under the soft close-based trigger (+41.95% → +54.12%, Sharpe 0.22 →
+  0.28) now **hurts** (+33.04%, 0.18, −56%), because a wick is noise while a close beyond the
+  level is information (§1.11 vs §1.11b). Inside the recommended basket a 15% stop moves three
+  tenths of a point, a 30% stop does nothing, a 20% trail buys 0.02 Sharpe for 2.7 points of
+  return, and a 50% take-profit costs 20 points of return for 1.5 of drawdown. **An exit that is
+  never touched is dead code; an exit that is touched costs money.** Use them for your own risk
+  tolerance, not to improve the strategy (§1.11b).
 * **Rejected by measurement, in one list**: cross-sectional ranking, shorting, grid trading,
   martingale, value averaging, RSI mean reversion, inverting an SMA, reading a slow signal
-  every bar on hourly data, and leverage (§2).
+  every bar on hourly data, leverage, and take-profit or stop-loss overlays on a trend rule
+  (§2).
 * **Corrections that changed published numbers**: the portfolio ran one rebalance late (fixed;
   every portfolio figure was re-measured), the entry commission cancelled itself out against
   the curve's normalising base, and the quote-filter result reversed once the timing was
   right (§3).
-* **Not modelled**: spread and slippage beyond a flat fee, delistings (the archive has none by
-  construction), intrabar stops, and funding — read §4 before trusting any number.
+* **Size is modelled too, and at retail it is noise.** `--capital 60000` charges each leg
+  `coefficient * per-bar volatility * sqrt(order / turnover_per_bar)` (the square-root impact
+  law). On the winning basket: **+83.90% at Sharpe 0.81 against +86.05% at 0.83** with spreads
+  only — 2.2 points — while $1M costs 8 points, $10M costs 24, and even $1M at the harsh
+  coefficient 0.5 leaves +51.6%. **Capacity is set by the thinnest leg** (0.5 bp of impact on
+  BTC at $60k against 29 bp on MOVR), because every leg is held at `1/N`; a ten-name basket is
+  as large as its least liquid name. Still unmodelled: partial fills and the queue, delistings
+  (the archive has none), the true path *inside* a bar (the convention in §1.11b is stated, not
+  measured), and funding — read §4 before trusting any number.
+* **A liquidity rule costs more than the illiquidity it avoids — that gap is the survivorship
+  bias, measured.** Holding a leg only while its rolling median turnover clears a floor
+  (`--min-turnover-now`) *always* costs return: $100k → +78.2%, $300k → +69.0%, $1M → +63.8%
+  against +86.1% for keeping everything, while the impact it avoids is worth 2.2 points at
+  $60k (§1.6b, §1.6c). The reason is structural: this archive has **no delistings**, so the thin
+  pairs in it are the ones that survived and multiplied, and the thin pairs that died are
+  missing. The cost of the rule is therefore a **lower bound on the bias** — at least 17 points
+  over five years — and it is the honest answer to "how much of this is survival": the +86%
+  describes the pairs that lived.
 * **Two working habits that caught real bugs**: calibrate every hand-rolled backtest against
   `engine.py` on a rule both can run, and treat a sweep whose columns are identical — or a
   windowed result that equals the full one — as broken, not as a finding (§1.1, §3).
@@ -234,16 +327,25 @@ Sharpe 0.87 and on the top ten +163.94% at 1.17, against +126.87% at 0.99 for th
 hand-picked five — the rule does not need the hindsight, and what is left to do with it is
 walk-forward the window, not de-bias the names.
 
-1. **Walk-forward the portfolio's own dials.** The winning basket has had it (§1.5a: five
-   yearly windows, compounded +75.9%, worst year −7.85%), but the wide book's gate thresholds
-   and `kcs-portfolio --vol-target/--vol-window` were picked on the whole history. The pattern
-   to copy is `kcs-basket --from … --to …` with the selection made before each window.
-   `--trend-gate` is a plateau and is the safe default; `--max-below-peak` is not — it
-   improves the recent five years most (−50% → +19%, −30% → +1,067%) and its threshold is a
-   parameter to re-choose per window. The old "filter the universe by liquidity" thread is
-   **answered and rejected** for this rule: every turnover floor made it worse (≥1e6 → −87%).
-2. Per-symbol spread and slippage instead of a flat 0.1% taker (small pairs are
-   worse, and the cross-section is full of them).
+1. **The measurement programme is complete for what this archive can answer.** Every dial has
+   been walked forward (§1.5a basket, §1.5b gates and sizing, §1.5c the rolling drawdown
+   threshold), costs are bounded from every side that can be measured from OHLCV — fees, the
+   per-pair spread (§1.6a), and your own size (§1.6b, 2.2 points at $60k, 8 at $1M, 24 at
+   $10M) — and the drawdown gate has passed its own placebo under sizing (−67.4% against
+   +612%, same book size). The one thread the data cannot settle is an archive **with
+   delistings**: every number here is survivorship-biased (§4), and the wide book most of all.
+   The "filter the universe by liquidity" thread is **answered and rejected**: every turnover
+   floor made the sign rule worse (≥1e6 → −87%).
+2. **Simulating the delistings the archive lacks.** Every measurable cost is now bounded (§1.6,
+   §1.6a, §1.6b) and the liquidity rule that would dodge the illiquid names is measured too —
+   it costs 17 points, which is the *lower bound* on what survivorship bias is worth (§1.6c).
+   What is still missing is the other half of that bound: a death process. Forcing a fraction of
+   the thin names to −100% each period, at a rate taken from KuCoin's real delisting history,
+   would turn "at least 17 points" into a range — and it needs no new market data, only a
+   number for the death rate.
 3. Leave-one-out across the twelve long symbols: how broad is the TSMOM edge really?
-4. Intrabar stops (ATR trailing, break-even) need an explicit fill model in
-   `engine.py`; close-based stops work with the current interface.
+4. **The intrabar fill model exists now** (`exit_prices`), so what is left here is the
+   *convention*, not the machinery: the current rule is stop-first with level fills, and an
+   ATR-trailing or break-even variant would be a variation on `intrabar_exits` rather than new
+   engine work. Any such variant inherits the assumption, which is worth remembering before
+   believing a small improvement from one.

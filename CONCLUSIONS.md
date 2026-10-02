@@ -384,11 +384,14 @@ Sharpe 0.87, and on the honest ten **+163.94% at Sharpe 1.17 with a −16.6% dra
 than the hand-picked basket on every measure. So "a handful of the most traded pairs, a slow
 trend filter per name, and a volatility target" is a rule, not a wish.
 
-**2. Sizing is what rescues the wide book, and it is still not enough.** `--vol-target 25%`
+**2. Sizing is what rescues the wide book, and the narrow book still dominates it.** `--vol-target 25%`
 turns the gated wide book from −45.55% into +37.06% and lifts Sharpe from −0.18 to 0.18 while
 cutting the drawdown from −86% to −54% (fees fall from 1,559% of capital to 113%) — the single
-largest improvement measured on that book. But 0.18 is still far below the narrow baskets'
-0.87-1.17: **a thousand pairs is the wrong shape for this rule** even with the right sizing.
+largest improvement measured on that book. Across five separate yearly windows the sized wide
+book compounds to **+46.9%** against **−36.8%** for holding the same universe (§1.5b), so it is
+not uninvestable — but the narrow basket returns **+75.9%** with a worst year of −7.85% against
+−20.1% and a worst drawdown of −15.3% against −46.1%. **Eight hundred pairs carry three times
+the drawdown for two thirds of the return.**
 
 **3. Re-equalising between names destroys the edge.** `kcs-riskparity` uses the same idea
 (rule-picked names, a volatility budget, a trend gate) and lands at +50% with Sharpe 0.19,
@@ -396,6 +399,90 @@ because it re-equalises the book every month — averaging down into the weakest
 what §1.9 measured on the two-name book. The basket holds **fixed weights** and never
 rebalances, so a winner keeps its weight while it runs. The comparison is not "which tool is
 better" but "rebalancing a five-name trend book is a cost, not a service".
+
+### 1.5b Walk-forward of the wide book's own dials — and a correction
+
+The same five yearly windows, now for the gated wide book (`kcs-portfolio`, 840 USDT pairs,
+sign 7/7), with the date window taken by `--from/--to` so each year is measured on its own:
+
+| window | no gates, no sizing | trend gate 200 | gate + `--vol-target 25%` | same universe held |
+|---|---|---|---|---|
+| 2021-10 → 2022-10 | −72.1% (−86.6% DD) | −66.1% (−82.3%) | **−6.9%** (−46.1%) | −19.3% |
+| 2022-10 → 2023-10 | −21.0% | **+17.2%** | −20.1% | −9.0% |
+| 2023-10 → 2024-10 | +127.8% | +100.9% | +95.4% (**Sharpe 1.95**, −28.8%) | +45.2% |
+| 2024-10 → 2025-10 | +19.8% | +13.8% | **+22.8%** (Sharpe 0.58) | +10.8% |
+| 2025-10 → 2026-10 | −37.0% | −36.5% | **−17.7%** | −46.5% |
+| **compounded** | **−62.1%** | **−42.3%** | **+46.9%** | **−36.8%** |
+
+**This corrects §1.5.** "A thousand pairs is the wrong shape for this rule" was measured
+without the sizing dial and is too strong: sized to a 25% volatility target — in the market
+about half the time — the wide book **beats its own passive benchmark by 84 points over five
+separate years** (−37% for holding the same 840 names) and its worst year is −20.1% instead of
+−72.1%. The trend gate helps in exactly one year (2022-23: +17.2% against −21.0%) and hurts in
+the rest; **the volatility target is doing nearly all of the work**, which is consistent with
+everything else in this file.
+
+What survives from §1.5 is the *comparison*, not the dismissal: the narrow basket still
+dominates on every measure over the same five windows — **+75.9% against +46.9%, a worst year
+of −7.85% against −20.1%, and a worst drawdown of −15.3% against −46.1%** (§1.5a). So the wide
+book is not uninvestable once it is sized; it is simply dominated by trading the ten busiest
+pairs instead of eight hundred, and it carries three times the drawdown for the privilege.
+
+### 1.5c The last dial, `--max-below-peak`, done honestly: re-chosen every window
+
+§1.3 measured this gate on the whole history and found no plateau, which makes a *fixed*
+threshold meaningless. The honest test is the one a trader would actually run: choose the
+threshold on the **two years before each test year only** (the trend gate and the 25%
+volatility target stay fixed), then apply it. Nothing about the test year is read:
+
+| test year | chosen on the prior 2 y | its result | Sharpe | max DD | in market | same rule, no peak gate | hindsight-best in that year |
+|---|---|---|---|---|---|---|---|
+| 2021-10 → 2022-10 | −50% | **+48.7%** | 1.02 | −30.8% | 48% | −6.9% | −30% → +121.1% |
+| 2022-10 → 2023-10 | −30% | **+23.9%** | 0.46 | −38.0% | 51% | −20.1% | −30% → +23.9% |
+| 2023-10 → 2024-10 | −30% | **+86.6%** | 1.78 | −20.9% | 53% | +95.4% | off → +95.4% |
+| 2024-10 → 2025-10 | −30% | **+72.5%** | 1.73 | −13.8% | 57% | +22.8% | −30% → +72.5% |
+| 2025-10 → 2026-10 | −30% | **+20.1%** | 0.53 | −16.7% | 45% | −17.7% | −30% → +20.1% |
+| **compounded** | | **+612.3%** | | worst −38.0% | ~51% | **+47.0%** | |
+
+Three findings, and the third is the one that matters:
+
+1. **The choice is stable.** −50% once and −30% four times in a row; hindsight inside each
+   test year would have picked −30% in four of five, and in the fifth (2023-24) it would have
+   turned the gate *off* for nine extra points. A dial that picks itself consistently out of
+   sample is not a fitted parameter.
+2. **All five years are positive** (+48.7%, +23.9%, +86.6%, +72.5%, +20.1%) with Sharpe
+   0.46-1.78 and the book in the market about half the time.
+3. **The value is in re-choosing, not in the gate.** The same configuration with no peak gate
+   compounds to **+47.0%** over the same five years, and with a *fixed* −90% to **+23.2%** —
+   worse than not having it. §1.3's "no plateau" was the correct observation, and it means a
+   constant will not do; what was missing is that the honest rolling choice works anyway.
+
+**The placebo, re-run under the sizing, says the gate is doing real work.** §1.3's rotation
+test left a doubt: rotating the readings *between symbols* still scored Sharpe 0.45 against
+0.90 for the real gate, so perhaps half of any gate effect is just "a smaller book churns
+less". Repeating that rotation here — same thresholds, same book size, no information — kills
+the doubt rather than confirming it:
+
+| test year | names bought (real / placebo) | real gate | placebo, median of 3 rotations |
+|---|---|---|---|
+| 2021-10 → 2022-10 | 194 / 207 | **+48.7%** | +11.0% |
+| 2022-10 → 2023-10 | 268 / 271 | **+23.9%** | −36.3% |
+| 2023-10 → 2024-10 | 337 / 348 | **+86.6%** | +50.9% |
+| 2024-10 → 2025-10 | 509 / 518 | **+72.5%** | −38.0% |
+| 2025-10 → 2026-10 | 739 / 747 | **+20.1%** | −50.8% |
+| **compounded** | | **+612.3%** | **−67.4%** |
+
+The book size is within 2-8 names of the real one in every year, so this is not a comparison
+between a small book and a large one. The gate beats its own placebo in all five years, by 36
+to 111 points, and the placebo is a **losing** strategy. **§1.3's caution was too cautious for
+the sized book**: there, the placebo kept half the Sharpe; here it loses money.
+
+One caveat does survive, and it is §4's: this is the survivorship-biased archive. A
+distance-from-peak gate on a universe where nothing ever delists is flattering, and an 840-name
+book is more exposed to that than a ten-name one — the narrow basket does not need the gate at
+all. So the honest ordering is: **the basket is the strategy to run, and the sized wide book
+with a rolling drawdown gate is the higher-return, higher-drawdown alternative that a
+delisting-inclusive archive would presumably punish.**
 
 ### 1.6 Costs
 
@@ -422,6 +509,122 @@ year. This is why the archive's headline experiment looks the way it does — SM
 
 **Consequence:** a rule has to trade rarely and only on liquid pairs. No entry
 logic measured here comes close to outweighing this.
+
+### 1.6a What the cost assumption is worth, measured two ways
+
+Every number in this file pays a flat 0.1% per side because that is the only figure the engine
+can know without an order book. Two measurements say how much that assumption matters, and
+they disagree in an informative way.
+
+**A per-pair spread, estimated from the bars.** `kcs-basket --spread-model corwin-schultz`
+reads each pair's own high-low ranges (Corwin-Schultz 2012, on **hourly** bars — a daily range
+is mostly volatility, not spread: the same estimator reads BTC at 30 bp on daily bars and
+5.6 bp on hourly ones) and charges each leg half of it per side on top of the fee. On the
+winning configuration over the last five years:
+
+| pair | estimated spread | total per side | | pair | estimated spread | total per side |
+|---|---|---|---|---|---|---|
+| DOT-USDT | 28.2 bp | 24.1 bp | | BNB-USDT | 9.9 bp | 14.9 bp |
+| ADA-USDT | 22.3 bp | 21.1 bp | | VET-USDT | 9.4 bp | 14.7 bp |
+| XRP-USDT | 18.0 bp | 19.0 bp | | BTC-USDT | 5.6 bp | 12.8 bp |
+| SOL-USDT | 17.5 bp | 18.8 bp | | MOVR-USDT | 0.0 bp | 10.0 bp (fallback) |
+| DOGE-USDT | 14.4 bp | 17.2 bp | | ETH-USDT | 12.3 bp | 16.2 bp |
+
+The result moves from **+91.43% at Sharpe 0.87** to **+86.05% at 0.83** (drawdown −17.5% →
+−17.9%, commission 6.2% → 9.9% of capital). The estimator is biased *upward* on volatile pairs,
+so this is a conservative bound: the honest reading is "realistic spreads cost a few points,
+not the edge".
+
+**A flat fee sweep, five times the modelled commission.** If the cost assumption is simply
+wrong by a factor, this is what it costs:
+
+| fee per side | 0.05% | 0.10% | 0.20% | 0.30% | 0.50% |
+|---|---|---|---|---|---|
+| total | +96.07% | +91.43% | +82.50% | +74.01% | **+58.27%** |
+| Sharpe | 0.90 | 0.87 | 0.80 | 0.74 | **0.61** |
+| max DD | −17.2% | −17.5% | −18.1% | −19.1% | −22.1% |
+
+**This configuration is not fee-fragile.** At five times the modelled commission it still
+returns +58% at Sharpe 0.61, where the wide 7/7 book lost half its result for every extra
+0.1% per side (§1.5). The reason is structural and worth stating plainly: a book that holds ten
+liquid pairs ~18% of the time pays 10-13% of capital in total costs over five years, while a
+book that re-shuffles 146 pairs every week pays 860% over nine. **Costs decide everything — on
+the strategy that trades a lot, and almost nothing on the one that does not.**
+
+### 1.6b What it costs to be your size, not zero size
+
+Every other number in this file is charged as if the order were infinitesimal: a flat fee plus
+(where measured) the pair's spread. The part of the cost that depends on **how much you are
+trading** is market impact, and it is now modelled as the standard square root:
+
+    impact per side = coefficient * per-bar volatility * sqrt(order_usd / turnover_per_bar)
+
+with the coefficient left as a knob (the literature band is roughly 0.1-1) so the answer is a
+band rather than a point. `kcs-basket --capital 60000` charges it per leg, and warns when a
+single order is 10% or more of one bar's turnover — which is days of that pair's volume, not
+one trade. The winning configuration, §1.4-1.5a, over the last five years:
+
+| cost assumption | total | Sharpe | max DD | commission, % of capital |
+|---|---|---|---|---|
+| fee + estimated spreads, no impact | +86.05% | 0.83 | −17.89% | 9.9% |
+| **$60k of capital** (coefficient 0.1) | **+83.90%** | **0.81** | −18.02% | 11.3% |
+| $1M | +77.64% | 0.77 | −18.63% | 15.2% |
+| $10M | +62.28% | 0.64 | −21.25% | 24.7% |
+| $1M with coefficient 0.5 (harsh) | +51.61% | 0.55 | −23.31% | 31.1% |
+
+Three things worth knowing:
+
+1. **At sixty thousand dollars the impact is noise** — 2.2 points of return and 0.02 of Sharpe,
+   because the orders are a few basis points of the volume even in the thin legs. The
+   configuration is size-agnostic where a retail account actually lives.
+2. **Capacity is set by the thinnest leg, not by the largest.** At $60k the per-leg charge is
+   0.5 bp on BTC and 29 bp on MOVR; the engine holds each leg at `1/N` of the capital, so the
+   smallest name in the selection decides how big the book can get. A ten-name basket is as
+   large as its least liquid name.
+3. **The damage is graceful.** Ten times the capital (+$10M) costs 24 points of return and 0.19
+   of Sharpe, and even the deliberately harsh calibration ($1M at coefficient 0.5) leaves
+   +51.6% at Sharpe 0.55. There is no cliff between $60k and $1M: the difference is 8 points.
+
+One caveat keeps this from being the last word: the turnover is measured **before** the
+reported window (the same causal rule as the spread model), so liquidity *decaying inside* the
+window is not captured — and it does decay. VET-USDT was selected as one of the ten busiest
+pairs in 2021 trading $15M a day and trades $0.7M a day now. Re-measuring liquidity per window
+— and dropping or shrinking a leg when it thins — is the remaining piece of this thread, and
+`--from/--to` is what it would be measured with.
+
+### 1.6c A leg that goes quiet — and what the survivorship bias is worth
+
+§1.6b left one hole: liquidity is measured once, before the window, so a leg that *thins while
+it is held* keeps its 1/N weight. `--min-turnover-now` closes it — a leg is held only while the
+rolling median turnover of its last `--turnover-window` bars (30 by default) is at least the
+threshold, decided bar by bar from bars up to that one, so a pair that goes quiet is dropped
+after the window and picked up again if it comes back:
+
+| rule | total | Sharpe |
+|---|---|---|
+| keep everything | **+86.05%** | **0.83** |
+| drop a leg below $100k a day | +78.20% | 0.80 |
+| drop a leg below $300k a day | +68.95% | 0.73 |
+| drop a leg below $1M a day | +63.81% | 0.71 |
+| $60k of capital, keep everything | +83.90% | 0.81 |
+| $60k of capital, drop below $300k | +67.83% | 0.72 |
+| $60k of capital, drop below $1M | +62.95% | 0.70 |
+
+**Every liquidity rule costs return, monotonically, and by far more than the impact it avoids**
+— 17 points to save the 2.2 points that §1.6b measured at $60k. That inversion is the
+signature of this archive's survivorship bias, not an argument against the rule: with no
+delistings in the data, the thin names that are present are precisely the ones that survived
+and multiplied, while the thin names that went quiet and then *died* are absent by
+construction. So the measured cost of the rule is a **lower bound on what the bias is worth**
+— at least 17 points over five years on this configuration, against the 2.2 points that size
+costs at retail.
+
+The practical reading for a real account is uncomfortable and worth stating plainly. **At $60k
+the arithmetic says keep the thin legs and pay their impact**, and that is what the tool now
+lets you measure — but the same archive cannot tell you whether the pairs that stayed thin
+would have kept trading. The risk is asymmetric: a leg that dies costs all of it, and there is
+no such leg anywhere in this file. Treat the +86% as the answer to "what happened to the pairs
+that survived", and treat the 17-point gap as the price of the question.
 
 ### 1.7 Trend following on liquid survivors is the only thing that survived
 
@@ -552,6 +755,131 @@ liquid names (`kcs-basket`: five majors, weekly grid, +202.9% against +51.1% for
 being a trend rule and becomes an index with a bill attached. It is the cleanest illustration
 of §1.1: the signal is the cheapest part of the system; the universe, the ability to leave
 the market, and the number of trades decide the outcome.
+
+### 1.11 Take-profit and stop-loss: when they help, and why not here
+
+**Read §1.11b first if you only read one of them.** This part fills the exits at the **next
+open** after a close beyond the level — the softest possible trigger, and the one that made a
+stop look useful on a breakout. §1.11b fills them *inside the bar* at the level, stop first,
+and **reverses that finding**. The law at the end of §1.11b is the one to keep.
+
+The natural next idea after a trend rule is to add the exits every trading course teaches. They
+are now measurable: `stops-sma`, `stops-breakout` and `voltarget-stops-sma` wrap any signal with
+a take-profit, a stop-loss and a trailing exit, all read **on closes** with a cooldown that
+stops the inner signal from buying straight back what it was just stopped out of. Reading them
+on closes is a deliberate limitation: with OHLCV bars nobody knows whether the high or the low
+came first, so "my stop would have filled at −10%" is an assumption, not a measurement — and
+this implementation is pessimistic instead, because the engine fills the exit at the **next
+open**, which on a gap is worse than the level.
+
+**Inside the configuration this file recommends** (top ten by turnover, `voltarget-sma` 50 bars
+/ 30% target, estimated spreads):
+
+| exits added | total | Sharpe | max DD | commission |
+|---|---|---|---|---|
+| none (the recommended one) | **+86.05%** | **0.83** | −17.89% | 9.94% |
+| stop-loss 15%, cooldown 5 | +85.75% | 0.83 | −17.89% | 9.97% |
+| stop-loss 30% | +86.05% | 0.83 | −17.89% | 9.94% |
+| trailing 20%, cooldown 5 | +82.13% | 0.82 | −17.93% | 10.20% |
+| take-profit 50% + stop-loss 15% | **+65.50%** | 0.72 | −17.20% | 10.44% |
+
+**Nothing here helps.** A 15% stop moves the result by three tenths of a point, a 30% stop
+changes literally nothing, a 20% trail costs four points, and a 50% take-profit costs **twenty
+points of return and 0.11 of Sharpe** in exchange for 0.7 points of drawdown. The take-profit is
+the clearest failure and the reason is §1.8 seen from the other side: if a handful of large runs
+pays for the whole strategy, then exiting at +50% removes precisely the trades being measured.
+
+**Why the stops do nothing at all** is a structural fact, not a threshold that happened to be
+wrong. Measured directly on BTC daily over five years, a stop-loss of 3%, 5%, 10% or 20% leaves
+the targets **identical on every one of the 1,826 bars**: the 50- or 200-bar mean exits before a
+close ever gets that far below the entry, so the stop is dead code. The same measurement with
+the plain SMA gives the same answer:
+
+| exits | total | Sharpe | max DD | trades |
+|---|---|---|---|---|
+| none | +221.11% | 0.66 | −36.19% | 19 |
+| stop-loss 3 / 5 / 10 / 20% | +221.11% | 0.66 | −36.19% | 19 |
+| trailing 25% | +234.31% | 0.69 | −33.57% | 20 |
+| trailing 15% | +115.77% | 0.46 | −39.63% | 28 |
+| take-profit 30% + stop-loss 10% | +114.82% | 0.46 | −43.47% | 32 |
+
+**Where a stop does have a job: when the strategy's own exit is far away.** A Donchian breakout
+leaves on a shorter low channel, which on daily bars can sit well below the entry — and there the
+stop earns its keep, improving return, Sharpe and drawdown together:
+
+| exits | total | Sharpe | max DD | trades |
+|---|---|---|---|---|
+| none | +41.95% | 0.22 | −54.03% | 28 |
+| stop-loss 10%, cooldown 5 | +54.12% | 0.28 | −48.29% | 30 |
+| stop-loss 20% / trailing 20% | +41.95% | 0.22 | −54.03% | 28 |
+| take-profit 30% + stop-loss 10% | +58.24% | 0.30 | −45.95% | 35 |
+
+**And on hourly bars they disappear again**: the same breakout on `1h` returns −62.39% with 626
+trades, and a 10% stop or a 20% trail changes **not one** of them, because at hourly scale a
+ten-bar channel is always closer than ten percent.
+
+**The law, which is what to take away from this section: an exit only matters if it is tighter
+than the exit the strategy already has — and even then it helps only when the existing exit is
+not the thing the edge depends on.** A trend follower's mean line is tighter than any sensible
+stop *and* it is the protection the edge is built on, so the stop is dead code and the
+take-profit cuts the winners. A breakout has no such protection, so the same stop pays.
+
+### 1.11b The same exits, filled inside the bar: the answer reverses
+
+§1.11 read its levels on closes, which is the softest trigger available. The conventional
+intrabar rule is stricter and needs a choice, because OHLC bars do not say whether the high or
+the low came first. This repository now states the choice and sticks to it: **if a bar touched
+both the stop and the take-profit, the stop is assumed to have filled**, the fill is the level
+itself, a bar that *opened* beyond the stop fills at the open (worse), and a gap through the
+take-profit still fills at the level (a windfall is not booked). The engine gained
+`exit_prices[t]` for this — a price at which a position still open during bar `t` was closed
+inside it — and the strategy reports it through `intrabar_exits`; `prod(1 + net_return)` still
+equals the final equity, which the tests pin.
+
+**BTC, daily, SMA 200, five years:**
+
+| exits | total | Sharpe | max DD | trades |
+|---|---|---|---|---|
+| none | **+221.11%** | **0.66** | **−36.19%** | 19 |
+| stop-loss 10%, cooldown 5 | +194.62% | 0.60 | −41.45% | 20 |
+| stop-loss 20% / 30% | +221.11% | 0.66 | −36.19% | 19 (never touched) |
+| take-profit 30% + stop-loss 10% | +71.90% | 0.33 | −42.31% | 33 |
+| trailing 15% | +55.99% | 0.26 | −52.15% | 32 |
+
+**The daily Donchian breakout — the case §1.11 held up as the stop's justification:**
+
+| exits | §1.11, close-based | §1.11b, filled in the bar |
+|---|---|---|
+| none | +41.95%, Sharpe 0.22, DD −54.03% | +41.95%, Sharpe 0.22, DD −54.03% |
+| stop-loss 10% | **+54.12%, 0.28, −48.29%** | **+33.04%, 0.18, −56.49%** |
+| take-profit 30% + stop-loss 10% | +58.24%, 0.30, −45.95% | +18.33%, 0.11, −54.52% |
+
+**The finding reverses.** The soft trigger was doing the work, not the stop: a close beyond the
+level is a rare event that carries information about the trend, while a wick through it is
+noise that the strategy's own signal knows nothing about. Exit on the wick and you realize the
+dip, pay the round trip, and re-enter higher — which is what the equity curve shows.
+
+**The configuration this file recommends, with intrabar exits:**
+
+| exits added | total | Sharpe | max DD | commission |
+|---|---|---|---|---|
+| none | **+86.08%** | 0.83 | −17.88% | 9.92% |
+| stop-loss 15%, cooldown 5 | +85.72% | 0.83 | −17.56% | 9.93% |
+| stop-loss 30% | +86.37% | 0.83 | −17.88% | 9.92% |
+| trailing 20% | +83.41% | **0.85** | −17.76% | 10.35% |
+| take-profit 50% + stop-loss 15% | +65.98% | 0.75 | **−16.35%** | 10.81% |
+
+Here the exits are nearly free but still not positive: a 15% stop moves three tenths of a point,
+a 30% stop does nothing, a 20% trail buys 0.02 of Sharpe for 2.7 points of return, and the
+take-profit costs **20 points of return** for 1.5 points of drawdown. The one honest use of
+these dials is as a *risk preference*: if you want a smaller drawdown and will pay for it in
+return, `--param take_profit=0.50 --param stop_loss=0.15` is the measured price.
+
+**The law, corrected. An exit that is never touched is dead code; an exit that is touched costs
+money, because a wick carries no information about the signal that put the position on.** The
+stop's justification in §1.11 — "it helps where the strategy's own exit is far away" — held
+only for the soft trigger. Add exits to control *your* risk tolerance, not to improve the
+strategy, and expect to pay for them in return.
 
 ## 2. Rejected by measurement
 
@@ -764,14 +1092,22 @@ tables in §1.7 and `AGENTS.md` rather than those.
 
 ## 4. Not modelled — read every number above with this in mind
 
-* **Spread and slippage per symbol.** Every result uses a flat 0.1% fee and
-  `--slippage 0`. Small pairs are worse in reality, and small pairs are exactly
-  where the spectacular tail returns (+35000%) came from.
+* **Size, not the spread, is now the missing cost.** The spread *is* modelled where it matters:
+  `kcs-basket --spread-model corwin-schultz` charges each pair half its own estimated spread
+  per side, measured on hourly bars, and it costs the winning configuration 0.04 Sharpe
+  (§1.6a). What no tool here knows is **how much you are trading**: there is no order size in
+  the model, so market impact, partial fills and the queue are absent — and they are worst
+  exactly on the small pairs where the spectacular tail returns came from. A flat fee is still
+  the default everywhere else, and the small-pair tail is where it is most wrong.
 * **Funding, borrow rates, liquidation.** No perp funding or margin interest is
   charged anywhere; the archive is spot. The short-leg numbers are therefore
   *optimistic*, which is one more reason they still lose.
-* **Intrabar stops.** Only close-based rules are expressible today; ATR trailing
-  and break-even stops need an explicit fill model in `engine.py`.
+* **The intrabar path itself.** Stops and take-profits are now expressible *inside* a bar
+  (`engine.run_backtest(..., exit_prices=...)`, fed by `Strategy.intrabar_exits`), but the
+  **convention** is an assumption and it is stated rather than measured: a bar that touches
+  both levels is taken to have filled the stop first, the fill is the level, a gap through it
+  fills at the open and a gap in your favour does not. OHLCV cannot tell you the true path, so
+  every intrabar number in §1.11b inherits that choice — and it is the pessimistic one.
 * **One regime.** Everything here is 2017–2026 crypto, which for alts was mostly a
   bear market. The edge is conditional on that.
 * **Selection.** Every screen over the archive is in-sample. The honest
@@ -903,6 +1239,14 @@ you sample a slow signal fast; at daily frequency there is nothing to fix.
 
 ### The stack I would actually run
 
+**One constraint comes before every number in this file: this is a spot account.** A spot
+balance cannot hold a negative position, so every recommended configuration is long or flat,
+and the tools now refuse to run anything else unless told otherwise (`kcs-backtest`,
+`kcs-basket` and `kcs-walkforward` all take `--allow-short`, and the long/short variants are
+named with an `-ls` suffix that no recommendation uses). The short-side work in §2 was done to
+*test* whether the mirror image of a long rule pays — it does not, which is one more reason the
+constraint costs nothing here.
+
 1. **Universe** — five to ten of the most liquid majors, chosen by a rule (trailing
    turnover strictly before the window you are judging, §1.3–1.5), never by hand. This
    *was* the largest weakness in this file and it is now measured: the same rule on the
@@ -953,29 +1297,34 @@ treat any single multiple as noise until a walk-forward agrees with it.
 
 ## 7. Next steps, in priority order
 
-1. **Walk-forward is done for the basket (§1.5a) — extend it to the portfolio.** Five
-   consecutive one-year windows with the selection made before each window: compounded +75.9%,
-   worst year −7.85%, worst drawdown −15.3%, against −52.4% for holding the same names. The
-   same treatment has not been applied to the wide book's gates or to `kcs-portfolio
-   --vol-target`, and those dials have plateaus that were fitted on the whole history.
+1. **The measurement programme is complete for what this archive can answer** — the basket in
+   §1.5a (compounded +75.9%, worst year −7.85%), the wide book's gates and sizing in §1.5b
+   (+46.9% against −36.8% for holding the same 840 pairs), the rolling `--max-below-peak` in
+   §1.5c (+612.3% and stable), and that gate's own placebo under sizing (−67.4% at the same book
+   size). Two threads are left and neither is a dial: **an archive with delistings** (this one
+   has none by construction, which flatters every drawdown gate) and **order size** (`--vol-window`
+   = 12 rebalances is also still assumed rather than measured, and it is the last fitted number).
 2. **The universe question is now answered for this rule.** "Remove the hindsight from the
    hand-picked asset list" — the thread this file opened at §1.9 — is closed: names chosen by
    turnover as of the window's first day do at least as well as the hand-picked five
    (`kcs-basket --select-turnover N`). What remains open is whether the *selection rule*
    itself holds up when the window moves, which is item 1.
-3. **Per-symbol spread and slippage** instead of a flat 0.1% taker. This is the last unmodelled
+3. **Per-symbol market impact** instead of a flat 0.1% taker. This is the last unmodelled
    part of the cost picture and it bites exactly the pairs that produce the tail — and the
    winning configuration trades the busiest names, where it should bite least.
 4. **Walk-forward the health-gate thresholds** (`--max-below-peak` has no plateau; `--trend-gate`
    does) and the sizing dial (`--vol-target`/`--vol-window`), which is the knob with the largest
    measured effect on the wide book.
-5. **Intrabar stops — last.** Time-based exits already work and stops are paid for in
-   commission; there is no measured evidence they would help.
+5. **Beyond the stated intrabar convention.** The fill model exists (`exit_prices`), the
+   convention is written down (stop first, level fills, gaps against you), and §1.11b shows the
+   exits cost money — so what is left is not machinery but a *better path model* (tick data, or
+   a sub-bar reconstruction) for anyone who wants to argue that a stop filled at a better price
+   than this convention assumes. Until then the honest position is §1.11b's.
 
 ## 8. Reproducing the headline numbers
 
 ```bash
-uv run pytest                          # 423 tests, ~32 s
+uv run pytest                          # 444 tests, ~25 s
 
 # one asset
 uv run kcs-backtest --symbol BTC-USDT --strategy tsmom \
@@ -1026,7 +1375,9 @@ Four shells in parallel finish the 4,434 series in about two and a half minutes
 option there; shard the list instead).
 
 **The configuration that works, in one command** (chosen by rule as of the window's first
-day, no hand-picked names):
+day, no hand-picked names) — and it is **recorded in `journal/runs.jsonl`**, so this result
+can be re-run and compared at any time rather than believed:
+`uv run kcs-journal verify --id 20261002T081142Z`:
 
 ```bash
 uv run kcs-basket --select-turnover 10 --timeframe 1d --strategy voltarget-sma \

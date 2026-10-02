@@ -156,6 +156,22 @@ def interval_seconds(timeframe: str) -> int:
         ) from None
 
 
+def parse_date(text: str | None, flag: str = "--date") -> int | None:
+    """An ISO date (`2024-10-01`) as a UTC midnight epoch second, or `None` for empty input."""
+    if not text:
+        return None
+    import datetime as dt
+
+    try:
+        return int(
+            dt.datetime.strptime(text, "%Y-%m-%d")
+            .replace(tzinfo=dt.timezone.utc)
+            .timestamp()
+        )
+    except ValueError as exc:
+        raise ValueError(f"{flag} wants an ISO date like 2024-10-01, got {text!r}") from exc
+
+
 def bars_per_year(timeframe: str) -> float:
     """How many bars of this timeframe a 365-day year holds (annualisation factor)."""
     if timeframe in CALENDAR_TIMEFRAMES:

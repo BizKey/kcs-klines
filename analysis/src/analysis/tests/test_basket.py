@@ -701,3 +701,60 @@ def test_the_turnover_ranking_reference_follows_the_window_start(tmp_path: Path,
         root, "1d", 4, lookback=100 * STEP, reference=START + 10 * STEP, quote="USDT",
     )
     assert "LATE-USDT" not in [symbol for symbol, _ in ranking]
+
+
+# --- the leg has to stay liquid ------------------------------------------------
+
+
+def test_the_liquidity_mask_is_causal_and_needs_a_full_window():
+    times = [START + i * STEP for i in range(10)]
+    turnover = [2_000_000.0] * 5 + [1_000.0] * 5
+    mask = basket.liquidity_mask(times, turnover, minimum=1_000_000, window=3)
+    # the first `window`-1 bars have no full reading yet, so they are refused
+    assert mask[times[0]] is False and mask[times[1]] is False
+    assert mask[times[2]] is True and mask[times[4]] is True
+    # once the quiet bars fill the window the leg is dropped, and it stays dropped
+    assert mask[times[6]] is False and mask[times[9]] is False
+
+
+def test_one_missing_bar_barely_moves_the_reading_but_a_dead_pair_is_dropped():
+    times = [START + i * STEP for i in range(12)]
+    turnover = [5_000_000.0] * 12
+    turnover[4] = 0.0                        # a single gap must not cause an exit and a re-entry
+    mask = basket.liquidity_mask(times, turnover, minimum=1_000_000, window=3)
+    assert mask[times[4]] is True, "one empty bar should not flatten the leg"
+    dead = [5_000_000.0] * 4 + [0.0] * 8     # a pair that stops trading must lose its reading
+    mask = basket.liquidity_mask(times, dead, minimum=1_000_000, window=3)
+    assert mask[times[11]] is False
+
+
+def test_the_rule_actually_flattens_a_leg_that_goes_quiet(tmp_path: Path, capsys):
+    root = tmp_path / "spot"
+    bars = make_bars(wavy(400))
+    # a leg that trades well and then stops trading halfway through
+    turnovers = [5_000_000.0] * 200 + [1_000.0] * 200
+    write_archive(root, "FADES-USDT", "1h", bars, turnovers=turnovers)
+    write_archive(root, "KEEPS-USDT", "1h", bars, turnovers=[5_000_000.0] * 400)
+
+    def run(*extra):
+        code = basket.main([
+            "--data-dir", str(root), "--timeframe", "1h",
+            "--symbols", "FADES-USDT,KEEPS-USDT", "--strategy", "sma",
+            "--param", "window=20", "--no-artifacts", *extra,
+        ])
+        printed = capsys.readouterr().out
+        assert code == 0
+        return printed
+
+    without = run()
+    with_rule = run("--min-turnover-now", "1000000", "--turnover-window", "20")
+    assert "liquidity rule: a leg is held only while" in with_rule
+
+    def exposure(printed_text: str) -> float:
+        """The basket's own exposure line, as a fraction, from the rendered report."""
+        line = next(
+            row for row in printed_text.splitlines() if row.strip().startswith("in market")
+        )
+        return float(line.split(":")[1].split("%")[0].strip().lstrip("+")) / 100.0
+
+    assert exposure(with_rule) < exposure(without)

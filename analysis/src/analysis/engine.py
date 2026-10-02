@@ -287,12 +287,22 @@ def run_backtest(
     label: str = "strategy",
     strict: bool = False,
     drawdown_scale: DrawdownScale | None = None,
+    exit_prices: list[float | None] | None = None,
+    spot_only: bool = False,
 ) -> BacktestResult:
     """Run one strategy over one series.
 
     `targets[t]` is the exposure the strategy wants *after* seeing the close of
     bar `t` (0 flat, 1 fully long, -1 fully short, fractions allowed); it takes
     effect at the open of bar `t+1`. `targets[0]` therefore never trades.
+
+    `exit_prices[t]` is a price at which a position still open during bar `t` was closed
+    *inside* that bar — how a stop-loss is filled when the bar's low (or a take-profit's
+    high) touches a level. The exposure then earns the move to that price and sits flat for
+    the rest of the bar, instead of earning to the next open. The strategy's own `targets`
+    must already be zero on that bar, which is what keeps the commission identical: the same
+    one turn out of the position is charged, only the price the position is marked at
+    changes. A `None` entry means nothing happened inside that bar.
 
     Raises `ValueError` on a length mismatch or an exposure outside `[-1, 1]`.
     """
@@ -303,6 +313,14 @@ def run_backtest(
     for t in targets:
         if not -1.0 <= t <= 1.0:
             raise ValueError(f"exposure {t} outside [-1, 1]")
+    if exit_prices is not None and len(exit_prices) != len(bars):
+        raise ValueError(f"got {len(exit_prices)} exit prices for {len(bars)} bars")
+    if spot_only and min(targets, default=0.0) < 0:
+        raise ValueError(
+            f"{label} would go short, and this is a spot account: a long-only or flat "
+            f"exposure is all a spot balance can express. Pass --allow-short to run it "
+            f"anyway, or use the long-only variant of the strategy."
+        )
 
     costs = costs or Costs()
     rate = costs.rate
@@ -338,7 +356,12 @@ def run_backtest(
             pos = effective[i]
         # The move into open[i] belongs to `prev`: the exposure already held
         # when bar i-1 opened. The decision `pos` is only credited from open[i].
-        before_costs = equity[i - 1] * (1.0 + prev * (bars[i].open / bars[i - 1].open - 1.0))
+        # What the exposure already held earned during bar i-1: to the next open by default,
+        # or only to the level it was stopped out at, if the strategy closed it inside that bar.
+        mark = bars[i].open
+        if exit_prices is not None and prev != 0 and exit_prices[i - 1] is not None:
+            mark = float(exit_prices[i - 1])
+        before_costs = equity[i - 1] * (1.0 + prev * (mark / bars[i - 1].open - 1.0))
         turn = abs(pos - prev)
 
         if turn:
@@ -382,10 +405,10 @@ def run_backtest(
             # the curve.
             open_trade.exit_index = i
             open_trade.exit_time = bars[i].time
-            open_trade.exit_price = bars[i].open
+            open_trade.exit_price = mark
             open_trade.equity_at_exit = after_costs
             open_trade.bars_held = i - open_trade.entry_index
-            open_trade.gross_return = (bars[i].open / open_trade.entry_price) ** open_trade.direction - 1.0
+            open_trade.gross_return = (mark / open_trade.entry_price) ** open_trade.direction - 1.0
             open_trade.net_return = after_costs / open_trade.equity_at_entry - 1.0
             trades.append(open_trade)
             open_trade = None
@@ -523,19 +546,24 @@ def buy_and_hold_bars(
     return Benchmark(equity=equity, performance=perf, gross_equity=equity[-1])
 
 
-def fees_in_window(run: BacktestResult, rate: float, start_index: int) -> float:
-    """Commission the engine charged from `start_index` on, in units of equity 1.0.
+def fees_in_window(
+    run: BacktestResult, rate: float, start_index: int, end_index: int | None = None
+) -> float:
+    """Commission the engine charged between `start_index` and `end_index`, in equity units.
 
     The engine only reports the total for the run, and a run may be longer than
     the window being reported; this recovers the part inside the window from the
     same identity the engine uses — `equity[i]` is `before_costs` times
     `(1 − rate)^turnover` — which `test_engine.py` checks against the reported
-    total when the window covers the whole series.
+    total when the window covers the whole series. `end_index` bounds the window
+    from above, so a stretch in the middle of a run is not billed for the trades
+    that happen after it.
     """
     if rate <= 0:
         return 0.0
     paid = 0.0
-    for i in range(max(start_index, 1), len(run.equity)):
+    stop = len(run.equity) if end_index is None else min(end_index + 1, len(run.equity))
+    for i in range(max(start_index, 1), stop):
         if run.equity[i] <= 0:  # wiped out here: the engine stops charging
             continue
         turn = abs(run.positions[i] - run.positions[i - 1])
@@ -550,9 +578,10 @@ def restrict(
     timeframe: str,
     *,
     first: int,
+    last: int | None = None,
     label: str | None = None,
 ) -> BacktestResult:
-    """The part of a run inside `[first, the end]`, rebased to 1.0 at its start.
+    """The part of a run inside `[first, last]` (or to the end), rebased to 1.0 at its start.
 
     Slicing the *result* rather than the *input* is the whole point: the strategy
     still saw every bar before the window, so its signals are the ones it really
@@ -567,7 +596,10 @@ def restrict(
     when the window began is carried in as a partial trade so that compounding
     the trade book still reproduces the curve exactly.
     """
-    inside = [i for i, bar in enumerate(bars) if bar.time >= first]
+    inside = [
+        i for i, bar in enumerate(bars)
+        if bar.time >= first and (last is None or bar.time <= last)
+    ]
     if len(inside) < 3:
         raise ValueError(
             f"the window starting {iso(bars[inside[0]].time) if inside else 'after the end'} "
@@ -584,10 +616,13 @@ def restrict(
     times = [bar.time for bar in window]
     per_year = bars_per_year_of(timeframe)
 
-    equity = [result.equity[i] / base for i in inside]
-    equity[-1] = result.performance.final_equity / base  # the open position, marked to market
     positions = [result.positions[i] for i in inside]
     targets = [result.targets[i] for i in inside]
+    equity = [result.equity[i] / base for i in inside]
+    # Mark whatever is still held at the window's last close. When the window ends at the
+    # last bar this is exactly the run's `final_equity`; when it ends earlier it is the same
+    # quantity for *that* bar, which is what makes a window in the middle of a series honest.
+    equity[-1] = equity[-1] * (1.0 + positions[-1] * (window[-1].close / window[-1].open - 1.0))
 
     trades: list[Trade] = []
     for trade in result.trades:
@@ -611,7 +646,7 @@ def restrict(
         equity=equity,
         trades=trades,
         costs=result.costs,
-        fees_paid=fees_in_window(result, result.costs.rate, start) / base,
+        fees_paid=fees_in_window(result, result.costs.rate, start, end) / base,
         performance=perf,
         gross_equity=gross,
         benchmark=buy_and_hold_bars(window, timeframe, result.costs),

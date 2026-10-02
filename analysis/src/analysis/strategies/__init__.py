@@ -37,6 +37,7 @@ from .breakout import DonchianBreakout  # noqa: E402
 from .macd import MacdTrend  # noqa: E402
 from .rsi_reversion import RsiReversion  # noqa: E402
 from .scaled import ScaledStrategy  # noqa: E402
+from .stops import StopsStrategy  # noqa: E402
 from .tsmom import Tsmom  # noqa: E402
 
 __all__ = [

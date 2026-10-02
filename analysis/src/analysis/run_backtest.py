@@ -167,6 +167,27 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         metavar="DIR",
         help="record this run in the trade journal (default dir: ./journal, kept in the repo)",
     )
+    parser.add_argument(
+        "--from",
+        dest="since",
+        default=None,
+        metavar="DATE",
+        help="report only the stretch starting here (ISO date); with --to this measures a "
+             "window in the middle of the history, warm-up intact",
+    )
+    parser.add_argument(
+        "--to",
+        dest="until",
+        default=None,
+        metavar="DATE",
+        help="report only the stretch ending here (ISO date, inclusive)",
+    )
+    parser.add_argument(
+        "--allow-short",
+        action="store_true",
+        help="run a strategy that takes short exposure; by default the tool refuses one, "
+             "because a spot account cannot hold a negative balance",
+    )
     parser.add_argument("--note", default="", help="a human note for the journal entry")
     parser.add_argument(
         "--keep-trades",
@@ -255,6 +276,9 @@ def run(
     costs: Costs,
     window: Window | None = None,
     drawdown_scale: engine.DrawdownScale | None = None,
+    allow_short: bool = False,
+    since: int | None = None,
+    until: int | None = None,
 ):
 
     """One strategy over one series, optionally reported for the last stretch only.
@@ -272,7 +296,19 @@ def run(
         costs,
         label=strategy.slug,
         drawdown_scale=drawdown_scale,
+        exit_prices=strategy.intrabar_exits(bars),
+        spot_only=not allow_short,
     )
+    if since is not None or until is not None:
+        return engine.restrict(
+            result,
+            bars,
+            timeframe,
+            first=since if since is not None else bars[0].time,
+            last=until,
+            label=f"{strategy.slug} ({data.iso(since or bars[0].time)[:10]}.."
+                  f"{data.iso(until or bars[-1].time)[:10]})",
+        )
     if window is None or window.full:
         return result
     return engine.restrict(
@@ -314,10 +350,27 @@ def main(argv: list[str] | None = None) -> int:
     quality = data.data_quality(bars, args.timeframe)
     costs = Costs(fee_per_side=args.fee, slippage_per_side=args.slippage)
     strategy = strategy_for(args.strategy, params)
+    try:
+        since = data.parse_date(args.since, "--from")
+        until = data.parse_date(args.until, "--to")
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from None
+    if args.last and (since or until):
+        raise SystemExit(
+            "--last and --from/--to are two ways to say the same thing; keep one "
+            "(--last counts back from the newest bar, --from/--to take dates)"
+        )
     window = Window.of(bars, args.timeframe, args.last) if args.last else None
 
     dd_scale = drawdown_scale_of(args.dd_scale)
-    result = run(bars, strategy, args.timeframe, costs, window, dd_scale)
+    try:
+        result = run(
+            bars, strategy, args.timeframe, costs, window, dd_scale,
+            allow_short=args.allow_short, since=since, until=until,
+        )
+    except ValueError as exc:
+        # a spot account cannot hold a short, and that is a message, not a stack trace
+        raise SystemExit(str(exc)) from None
     if dd_scale is not None:
         result.warnings.insert(
             0,
@@ -341,7 +394,7 @@ def main(argv: list[str] | None = None) -> int:
     if sweep:
         _print_sweep(args, bars, costs, params, sweep, window)
     if not args.no_fee_grid:
-        _print_fee_grid(args, bars, strategy, window)
+        _print_fee_grid(args, bars, strategy, window, since, until)
 
     if args.no_artifacts:
         if args.journal is not None:
@@ -447,21 +500,31 @@ def _print_sweep(
 
 
 def _print_fee_grid(
-    args: argparse.Namespace, bars, strategy: Strategy, window: Window | None = None
+    args: argparse.Namespace,
+    bars,
+    strategy: Strategy,
+    window: Window | None = None,
+    since: int | None = None,
+    until: int | None = None,
 ) -> None:
     print()
     print("commission sensitivity (net, same signals):")
     print(f"  {'fee/side':>9}{'trades':>9}{'final equity':>16}{'total':>14}{'CAGR':>10}")
     for fee in FEE_GRID:
         sweep = run(
-            bars, strategy, args.timeframe, Costs(fee_per_side=fee, slippage_per_side=args.slippage), window
+            bars, strategy, args.timeframe,
+            Costs(fee_per_side=fee, slippage_per_side=args.slippage), window,
+            allow_short=args.allow_short, since=since, until=until,
         )
         perf = sweep.performance
         print(
             f"  {fee:>9.2%}{len(sweep.closed_trades):>9}{perf.final_equity:>15.4f}x"
             f"{pct(perf.total_return):>14}{pct(perf.cagr):>10}"
         )
-    bench = run(bars, strategy, args.timeframe, Costs(fee_per_side=args.fee), window).benchmark.performance
+    bench = run(
+        bars, strategy, args.timeframe, Costs(fee_per_side=args.fee), window,
+        allow_short=args.allow_short, since=since, until=until,
+    ).benchmark.performance
     print(
         f"  {'B&H':>9}{1:>9}{bench.final_equity:>15.4f}x"
         f"{pct(bench.total_return):>14}{pct(bench.cagr):>10}"

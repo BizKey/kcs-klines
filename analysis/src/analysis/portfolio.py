@@ -66,6 +66,10 @@ class Panel:
     #: the same window (`volatility`). `None` where the history does not exist yet.
     #: An empty mapping keeps a hand-built panel valid.
     gates: dict[str, list[float | None]] = field(default_factory=dict)
+    #: The rebalance grid this panel was sampled on, shared by reference between panels.
+    #: `run_portfolio` checks it, because a panel and a date list that disagree line up
+    #: positionally and produce a plausible-looking curve from the wrong bars.
+    grid: list[int] | None = None
 
 
 @dataclass
@@ -426,7 +430,9 @@ def build_panel(
             "turnover": liquid,
             "volatility": vol,
         }
-    return Panel(symbol=symbol, closes=sampled, momentum=momentum, gates=gates)
+    return Panel(
+        symbol=symbol, closes=sampled, momentum=momentum, gates=gates, grid=dates
+    )
 
 
 def load_calendar(
@@ -563,6 +569,18 @@ def run_portfolio(
     costs = costs or Costs()
     if len(dates) < 3 or not panels:
         raise ValueError("need at least a few rebalance dates and one symbol with data")
+    # A panel is sampled *on* a grid: its close and momentum lists are positional. Handing
+    # `run_portfolio` a different (sliced, rebased, reversed) date list reads the wrong bars
+    # and reports a confident curve for a window that was never measured.
+    for panel in panels:
+        if panel.grid is not None and list(panel.grid) != list(dates):
+            raise ValueError(
+                f"{panel.symbol}: this panel was sampled on a different rebalance grid "
+                f"({data.iso(panel.grid[0])[:10]}..{data.iso(panel.grid[-1])[:10]}, "
+                f"{len(panel.grid)} dates) than the {len(dates)} dates it was handed "
+                f"({data.iso(dates[0])[:10]}..{data.iso(dates[-1])[:10]}); rebuild the "
+                "panel for the window you want — `kcs-portfolio --from/--to` does that"
+            )
     # The curve has one point per rebalance, so that is the period to annualise by.
     per_year = bars_per_year / rebalance
 
@@ -1250,6 +1268,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--fee", type=float, default=0.001)
     parser.add_argument("--slippage", type=float, default=0.0)
     parser.add_argument(
+        "--from",
+        dest="since",
+        default=None,
+        metavar="DATE",
+        help="start the reported window here (ISO date); with --to this evaluates one "
+             "stretch, which is what a walk-forward needs",
+    )
+    parser.add_argument(
+        "--to",
+        dest="until",
+        default=None,
+        metavar="DATE",
+        help="end the reported window here (default: the newest rebalance)",
+    )
+    parser.add_argument(
         "--last",
         type=int,
         default=None,
@@ -1321,6 +1354,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 ANY_QUOTE = ("any", "all", "*")
 
 
+def day_epoch(text: str | None, flag: str) -> int | None:
+    """An ISO date (`2024-10-01`) as a UTC midnight epoch second."""
+    try:
+        return data.parse_date(text, flag)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+
+
 def parse_quotes(spec: str) -> tuple[str, ...] | None:
     """`USDT`, `USDT,BTC` or `any` (which means "do not filter").
 
@@ -1381,6 +1422,24 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit(
             f"{args.rebalance}-bar rebalancing leaves {len(dates)} dates; use a shorter interval"
         )
+    since = day_epoch(args.since, "--from")
+    until = day_epoch(args.until, "--to")
+    if args.last is not None and (since or until):
+        raise SystemExit(
+            "--last and --from/--to are two ways to say the same thing; keep one "
+            "(--last counts rebalances, --from/--to take dates)"
+        )
+    if since or until:
+        window = [
+            moment for moment in dates
+            if (since is None or moment >= since) and (until is None or moment <= until)
+        ]
+        if len(window) < 3:
+            raise SystemExit(
+                f"{len(window)} rebalance(s) between {data.iso(since or dates[0])[:10]} and "
+                f"{data.iso(until or dates[-1])[:10]}; widen the range"
+            )
+        dates = window
     if args.last is not None:
         if args.last < 3:
             raise SystemExit("--last needs at least 3 rebalances to measure anything")

@@ -47,5 +47,15 @@ class Strategy(ABC):
         """Parameters that define this instance, for logs and JSON."""
         return {}
 
+    def intrabar_exits(self, bars: list[Bar]) -> list[float | None] | None:
+        """Prices at which a position was closed *inside* a bar, one entry per bar.
+
+        Only strategies that model levels — a stop-loss, a take-profit — return anything
+        here, and the convention has to be stated by the strategy because OHLC bars do not
+        say whether the high or the low came first. `None` (the default) means the engine
+        fills every exposure change at the next open, which is what everything else does.
+        """
+        return None
+
     def __str__(self) -> str:
         return self.slug

@@ -446,3 +446,91 @@ def test_bad_overlay_settings_are_rejected():
         DrawdownScale(floor=1.5)
     with pytest.raises(ValueError, match="start < full"):
         DrawdownScale(start=1.0, full=1.0)
+
+
+# --- exits filled inside the bar -------------------------------------------------
+
+
+def _bars_with_range(closes, lows, highs):
+    from ..data import Bar
+
+    return [
+        Bar(time=1_507_161_600 + i * 3_600, open=close, high=high, low=low, close=close, volume=1.0)
+        for i, (close, low, high) in enumerate(zip(closes, lows, highs))
+    ]
+
+
+def test_an_intrabar_exit_is_filled_at_the_level_not_the_next_open():
+    """The stop is touched and the bar closes back above it: the exit still happens."""
+    bars = _bars_with_range([100.0, 100.0, 100.0, 120.0], [100.0, 100.0, 90.0, 120.0],
+                            [100.0, 100.0, 105.0, 120.0])
+    targets = [1.0, 1.0, 0.0, 1.0]
+    exits = [None, None, 90.0, None]
+    stopped = run_backtest(bars, targets, "1h", Costs(0), exit_prices=exits)
+    opened = run_backtest(bars, targets, "1h", Costs(0))
+    # the stop converts a dip that recovered into a realized −10%
+    assert stopped.performance.final_equity == pytest.approx(0.9 * 1.2 ** 0)
+    assert opened.performance.final_equity == pytest.approx(1.2)
+    trade = stopped.trades[0]
+    assert trade.exit_price == pytest.approx(90.0)
+    assert trade.net_return == pytest.approx(-0.1)
+
+
+def test_the_bookkeeping_invariant_survives_an_intrabar_exit():
+    bars = _bars_with_range([100.0, 100.0, 100.0, 105.0, 130.0],
+                            [100.0, 100.0, 90.0, 105.0, 130.0],
+                            [100.0, 100.0, 105.0, 105.0, 130.0])
+    targets = [1.0, 1.0, 0.0, 1.0, 1.0]
+    exits = [None, None, 90.0, None, None]
+    result = run_backtest(bars, targets, "1h", Costs(fee_per_side=0.001),
+                                 exit_prices=exits)
+    compounded = 1.0
+    for trade in result.trades:
+        compounded *= 1.0 + trade.net_return
+    assert compounded == pytest.approx(result.performance.final_equity)
+    assert result.bookkeeping_error == pytest.approx(0.0, abs=1e-12)
+
+
+def test_an_exit_price_changes_the_price_without_changing_the_exposure_path():
+    """Same one turn out of the position — only the price it is marked at is different.
+
+    The *absolute* fee is smaller, because commission is charged against the account value and
+    the stopped-out position is worth less by then; what is identical is the sequence.
+    """
+    bars = _bars_with_range([100.0, 100.0, 100.0, 105.0], [100.0, 100.0, 90.0, 105.0],
+                            [100.0, 100.0, 105.0, 105.0])
+    targets = [1.0, 1.0, 0.0, 0.0]
+    plain = run_backtest(bars, targets, "1h", Costs(fee_per_side=0.001))
+    level = run_backtest(bars, targets, "1h", Costs(fee_per_side=0.001),
+                         exit_prices=[None, None, 90.0, None])
+    assert [trade.direction for trade in level.trades] == [
+        trade.direction for trade in plain.trades
+    ]
+    assert level.fees_paid < plain.fees_paid          # a smaller account pays less
+    assert level.performance.final_equity < plain.performance.final_equity
+
+
+def test_a_mismatched_exit_list_is_refused():
+    bars = make_bars(ramp(10))
+    with pytest.raises(ValueError):
+        run_backtest(bars, [0.0] * 10, "1h", exit_prices=[None] * 9)
+
+
+def test_a_stop_is_filled_first_when_a_bar_touches_both_levels():
+    from ..strategies import get_strategy
+
+    strategy = get_strategy(
+        "stops-sma", window=2, stop_loss=0.05, take_profit=0.05, cooldown=1
+    )
+    bars = _bars_with_range([90.0, 100.0, 100.0], [90.0, 100.0, 90.0], [90.0, 100.0, 120.0])
+    exits = strategy.intrabar_exits(bars)
+    assert exits[2] == pytest.approx(95.0)          # the stop, not the take profit at 105
+
+
+def test_a_gap_through_the_stop_fills_at_the_open():
+    from ..strategies import get_strategy
+
+    strategy = get_strategy("stops-sma", window=2, stop_loss=0.05, cooldown=1)
+    bars = _bars_with_range([90.0, 100.0, 80.0], [90.0, 100.0, 80.0], [90.0, 100.0, 100.0])
+    exits = strategy.intrabar_exits(bars)
+    assert exits[2] == pytest.approx(80.0)          # worse than the 95 level

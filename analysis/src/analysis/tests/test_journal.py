@@ -7,6 +7,7 @@ parameters, and assert that `verify` notices each one and says which it was.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import subprocess
 from pathlib import Path
@@ -15,7 +16,7 @@ import pytest
 
 from .. import data, engine, journal
 from ..strategies import SmaTrend, get_strategy
-from .conftest import make_bars, wavy, write_archive
+from .conftest import START, STEP, make_bars, wavy, write_archive
 
 FEE = 0.001
 
@@ -474,3 +475,91 @@ def test_the_journal_directory_is_not_gitignored(tmp_path):
         ["git", "check-ignore", "-q", "analysis/out/metrics.json"], cwd=repo, capture_output=True
     )
     assert ignored.returncode == 0, "analysis/out/ is expected to stay ignored"
+
+
+# --- baskets ------------------------------------------------------------------
+
+
+def _two_leg_archive(tmp_path: Path) -> Path:
+    root = tmp_path / "spot"
+    for symbol in ("AAA-USDT", "BBB-USDT"):
+        write_archive(root, symbol, "1h", make_bars(wavy(400)))
+    return root
+
+
+def _journal_a_basket(root: Path, journal_dir: Path, capsys) -> journal.RunEntry:
+    from .. import basket
+
+    code = basket.main([
+        "--data-dir", str(root), "--timeframe", "1h",
+        "--symbols", "AAA-USDT,BBB-USDT", "--strategy", "sma", "--param", "window=20",
+        "--journal", str(journal_dir), "--no-artifacts",
+    ])
+    printed = capsys.readouterr().out
+    assert code == 0
+    assert "journalized" in printed
+    entries = journal.load_runs(journal_dir)
+    assert len(entries) == 1
+    return entries[0]
+
+
+def test_a_basket_run_can_be_journaled_and_verified(tmp_path: Path, capsys):
+    root = _two_leg_archive(tmp_path)
+    entry = _journal_a_basket(root, tmp_path / "journal", capsys)
+
+    assert entry.kind == journal.KIND_BASKET
+    assert entry.data is None
+    assert entry.symbols == ["AAA-USDT", "BBB-USDT"]
+    assert entry.bars == 800                      # both legs, whole history
+    assert "basket" in entry.run_id               # and an id that is easy to type
+
+    check = journal.verify(entry, root, journal_dir=None)
+    assert check.status == journal.STATUS_VERIFIED, check.message
+    assert check.mismatches == []
+    assert check.digest_actual == check.digest_recorded
+
+
+def test_a_basket_entry_notices_that_a_leg_changed(tmp_path: Path, capsys):
+    root = _two_leg_archive(tmp_path)
+    entry = _journal_a_basket(root, tmp_path / "journal", capsys)
+
+    # same closes, so every metric must reproduce — but the stored bars are not the same ones
+    tampered = [dataclasses.replace(bar, volume=2.0) for bar in make_bars(wavy(400))]
+    write_archive(root, "AAA-USDT", "1h", tampered)
+
+    check = journal.verify(entry, root, journal_dir=None)
+    assert check.status == journal.STATUS_DATA_CHANGED, check.message
+    assert check.digest_actual != check.digest_recorded
+
+
+def test_a_basket_entry_survives_the_archive_growing(tmp_path: Path, capsys):
+    root = _two_leg_archive(tmp_path)
+    entry = _journal_a_basket(root, tmp_path / "journal", capsys)
+
+    # a later backfill appends bars; the recorded window is what has to reproduce
+    grown = make_bars(wavy(400), start=START + 400 * STEP)
+    write_archive(root, "AAA-USDT", "1h", make_bars(wavy(400)) + grown, name="all.parquet")
+
+    check = journal.verify(entry, root, journal_dir=None)
+    assert check.status == journal.STATUS_VERIFIED, check.message
+
+
+def test_a_basket_entry_remembers_per_leg_spread_costs(tmp_path: Path, capsys):
+    """With `--spread-model` each leg pays its own fee, and verification must use those numbers."""
+    from .. import basket
+
+    root = _two_leg_archive(tmp_path)
+    journal_dir = tmp_path / "journal"
+    code = basket.main([
+        "--data-dir", str(root), "--timeframe", "1h",
+        "--symbols", "AAA-USDT,BBB-USDT", "--strategy", "sma", "--param", "window=20",
+        "--spread-model", "corwin-schultz", "--spread-window", "50",
+        "--journal", str(journal_dir), "--no-artifacts",
+    ])
+    capsys.readouterr()
+    assert code == 0
+    entry = journal.load_runs(journal_dir)[0]
+    assert set(entry.leg_costs) == {"AAA-USDT", "BBB-USDT"}
+    assert entry.leg_costs["AAA-USDT"]["fee_per_side"] >= entry.costs["fee_per_side"]
+    check = journal.verify(entry, root, journal_dir=None)
+    assert check.status == journal.STATUS_VERIFIED, check.message

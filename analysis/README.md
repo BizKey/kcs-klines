@@ -18,7 +18,7 @@ uv run kcs-backtest --strategy tsmom --param lookback=30 --param rebalance=7 \
     --dd-scale 10,40,25                           # cut size while the account is in drawdown
 uv run kcs-riskparity --top 5 --min-history 3y --vol-budget 0.4   # a de-risked book
 uv run kcs-journal verify        # re-check what was recorded
-uv run pytest                    # 423 tests
+uv run pytest                    # 466 tests
 ```
 
 `analysis` is a [uv](https://docs.astral.sh/uv/) workspace member: the root
@@ -36,6 +36,57 @@ the repository root (`kcs-klines backfill`), which writes KuCoin Spot OHLCV as
 Parquet under `data/kucoin/spot/<SYMBOL>/<TIMEFRAME>/`.
 
 ---
+
+**Spot only.** `kcs-backtest`, `kcs-basket` and `kcs-walkforward` refuse a strategy whose
+targets go negative, because a spot account cannot hold a short: the refusal names the strategy
+and tells you to pass `--allow-short` if you really mean it. The long/short variants carry an
+`-ls` suffix (`sma-ls`, `breakout-ls`, `macd-ls`, `rsi-rev-ls`, `sma-rev-ls`, `tsmom-ls`,
+`voltarget-sma-ls`), and a test asserts that every strategy *without* that suffix is long-only
+on bars that rise and then fall — so the naming convention is checked, not trusted.
+`kcs-portfolio --mode` defaults to `long-only` and `kcs-riskparity` never shorts.
+
+**Charging your own size.** `--capital 60000` adds the market impact of *your* order to each
+leg, using the square-root law `coefficient * per-bar volatility * sqrt(order_usd /
+turnover_per_bar)`, where the order is the leg's weight times the capital and the market stats
+are measured **before** the reported window (the same causal rule as the spread model). The
+coefficient is a knob, not a fitted number — the literature band is about 0.1-1, the default is
+0.1, and `--impact-coefficient` moves it. The report prints each leg's total cost per side, its
+round trip and how much of it is above the flat fee, and warns when one order is 10% or more of
+a single bar's turnover (that is days of the pair's volume, not one trade). On the recommended
+configuration the impact costs **2.2 points of return at $60k** (+86.05% → +83.90%, Sharpe
+0.83 → 0.81), 8 points at $1M and 24 at $10M; see `CONCLUSIONS.md` §1.6b.
+
+**Holding a leg only while it is still liquid.** `--min-turnover-now 300000` drops a leg when
+the rolling median turnover of its last `--turnover-window` bars (default 30) falls below the
+threshold, bar by bar and from past data only — the selection picked the pair when it *was*
+liquid, which is no reason to keep it. A single empty bar does not trigger an exit (the window
+holds bars, so one gap barely moves a median) but a pair that stops trading loses the reading
+and with it its position. Measured on the recommended configuration this rule **costs** return
+at every level (+86.1% → +69.0% at $300k), and `CONCLUSIONS.md` §1.6c explains why that
+inversion is the size of the archive's survivorship bias rather than a reason to skip it.
+
+**Journaling a basket.** `kcs-basket --journal [DIR]` records the run the same way
+`kcs-backtest --journal` does, and `kcs-journal verify` re-runs every leg and compares the
+combined curve, the benchmark and each leg's numbers. The entry stores the legs (with a
+SHA-256 digest each), the window that was reported, and the per-leg costs when
+`--spread-model` was used, so a configuration that was measured with realistic spreads stays
+checkable. The repository's own `journal/runs.jsonl` holds exactly one such entry: the
+configuration §1.4-1.5a recommends, recorded with `--select-turnover 10` and the
+corwin-schultz spread model, verifiable with
+`uv run kcs-journal verify --id 20261002T081142Z`.
+
+**Charging each leg the spread it actually has.** `--spread-model corwin-schultz` estimates
+every pair's proportional spread from its own high-low ranges (Corwin & Schultz 2012) and adds
+**half of it per side** on top of `--fee`, so a wide-spread leg pays for itself instead of
+hiding behind an average. `--spread-timeframe` (default `1h`) picks the series to measure on —
+this matters a lot: the same estimator reads BTC at **30 bp on daily bars and 5.6 bp on
+hourly** ones, because a daily high-low range is mostly volatility. `--spread-window` is the
+number of bars (default 500), and the measurement stops **before** the reported window starts,
+so a walk-forward cannot price a leg with its own future. A leg with no estimate (a thin pair
+where every two-bar stretch is explained by its ranges) falls back to the flat fee and says so.
+On the configuration from `CONCLUSIONS.md` §1.4 the honest per-leg charge moves +91.43% at
+Sharpe 0.87 to +86.05% at 0.83 — and the whole result survives a flat fee five times the
+modelled one (+58.27%, Sharpe 0.61), which is what "not fee-fragile" means.
 
 **Evaluating one stretch, which is what a walk-forward needs.** `--from 2024-10-01 --to
 2025-10-01` bounds the reported window by date instead of "the last N", so the same rule can be
@@ -94,6 +145,7 @@ analysis/
 | `strategies/rsi_reversion.py` | `RsiReversion` — buy oversold RSI, leave on an exit level or a time stop |
 | `strategies/scaled.py` | `ScaledStrategy` — wrap any strategy and size it to a volatility target |
 | `strategies/breakout.py` | `DonchianBreakout` — entry channel and a *shorter* exit channel, plus `min_hold` |
+| `strategies/stops.py` | `StopsStrategy` — take-profit, stop-loss and trailing exits around any signal, registered as `stops-sma`, `stops-breakout`, `voltarget-stops-sma`. Two triggers: **on closes** (filled at the next open) and **inside the bar** through `intrabar_exits`, where the convention is stated explicitly — the stop wins if a bar touches both levels, it fills at the level, a gap through it fills at the open, a gap in your favour does not, and the trailing level is the one armed by the closes *before* the bar. `CONCLUSIONS.md` §1.11 and §1.11b measure both: an exit that is never touched is dead code, one that is touched costs money, and the soft close trigger is what made a stop look useful on a breakout (that finding reverses inside the bar) |
 | `strategies/registry.py` | registry machinery: `register`, `parameters`, `sweep_parameter` |
 | `strategies/__init__.py` | the registry: `get_strategy("sma", window=200)`, parameter introspection |
 | `report.py` | console report plus CSV / JSON / SVG writers |
@@ -220,6 +272,13 @@ uv run kcs-portfolio --timeframe 1d --lookback 30 --rebalance 30 --select sign -
 * `--last N` reports only the newest `N` rebalances. Warm-up still uses the history
   before them, so an indicator is never cold at the window's start, and the curve is
   the portfolio's own (nothing is rebased from the longer run).
+* `--from 2024-10-01 --to 2025-10-01` bounds the reported window by date (the same flag the
+  basket takes), which is what a walk-forward of the *portfolio* needs; `--last` counts
+  rebalances instead and the two are refused together. Note that `run_portfolio` now **checks**
+  that every panel was sampled on the grid it is handed and raises if not: a sliced date list
+  with full-history panels lines up positionally and would report a confident curve for a
+  window that was never measured (this is exactly how a walk-forward script of mine produced
+  five identical years before the guard existed);
 * the console report lists **which pairs were actually traded**: how many of the universe
   were held at least once, how many were never bought, and a table of the busiest ones
   (rebalances held, entries, exits, first and last date in the book).

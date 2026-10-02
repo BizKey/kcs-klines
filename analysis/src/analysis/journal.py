@@ -48,7 +48,13 @@ from .metrics import pct
 from .strategies import get_strategy
 
 #: Bumped when the entry schema changes in a way old readers must know about.
-JOURNAL_FORMAT = 1
+JOURNAL_FORMAT = 2
+
+#: What kind of run an entry records. A backtest is one series; a basket is several legs
+#: combined at fixed weights, and it carries a `legs` digest per symbol instead of one
+#: `data` window.
+KIND_BACKTEST = "backtest"
+KIND_BASKET = "basket"
 
 #: `journal/` next to the repository root, independent of the working directory.
 DEFAULT_JOURNAL_DIR = data.repo_root() / "journal"
@@ -140,42 +146,91 @@ class RunEntry:
     strategy: str
     params: dict
     costs: dict
-    data: DataWindow
     metrics: dict
+    data: DataWindow | None = None
+    legs: dict[str, DataWindow] = field(default_factory=dict)
+    #: How the reported stretch was cut out of the legs' history: `seconds` for `--last`,
+    #: `since`/`until` for explicit dates. A basket needs it, because its legs are always
+    #: run over their whole history and only the reported window moves.
+    window: dict = field(default_factory=dict)
+    #: Per-leg costs when they differ from `costs` (the spread model charges each pair its own
+    #: estimated half-spread). The numbers are stored, not re-derived, so a later estimate from
+    #: a grown archive cannot silently change what the entry is checked against.
+    leg_costs: dict[str, dict] = field(default_factory=dict)
+    kind: str = KIND_BACKTEST
     note: str = ""
     trades_file: str | None = None
     journal_format: int = JOURNAL_FORMAT
 
+    @property
+    def symbols(self) -> list[str]:
+        """Every symbol the entry covers: one for a backtest, the legs for a basket."""
+        if self.kind == KIND_BASKET:
+            return sorted(self.legs)
+        return [self.data.symbol] if self.data else []
+
     def to_json(self) -> str:
         payload = asdict(self)
-        payload["data"] = asdict(self.data)
+        payload["data"] = asdict(self.data) if self.data else None
+        payload["legs"] = {symbol: asdict(leg) for symbol, leg in self.legs.items()}
         return json.dumps(payload, sort_keys=True, ensure_ascii=False)
 
     @classmethod
     def from_dict(cls, payload: dict) -> RunEntry:
         payload = dict(payload)
-        payload["data"] = DataWindow(**payload["data"])
+        payload["data"] = DataWindow(**payload["data"]) if payload.get("data") else None
+        payload["legs"] = {
+            symbol: DataWindow(**leg) for symbol, leg in payload.get("legs", {}).items()
+        }
+        # entries written before the basket support carry neither key
+        payload.setdefault("kind", KIND_BACKTEST)
         return cls(**payload)
+
+    def _curve(self, name: str) -> float:
+        """One number of the headline curve, whichever kind of run this is.
+
+        A backtest stores the engine's own tree (`strategy.*`); a basket stores its combined
+        curve under `return.*`, so the same property serves both and the console keeps working.
+        """
+        if self.kind == KIND_BASKET:
+            return float(self.metrics["return"][name])
+        return float(self.metrics["strategy"][name])
 
     @property
     def total_return(self) -> float:
-        return float(self.metrics["strategy"]["total_return"])
+        return self._curve("total_return")
 
     @property
     def cagr(self) -> float:
-        return float(self.metrics["strategy"]["cagr"])
+        return self._curve("cagr")
 
     @property
     def max_dd(self) -> float:
-        return float(self.metrics["strategy"]["max_dd"])
+        return self._curve("max_dd")
 
     @property
     def sharpe(self) -> float:
-        return float(self.metrics["strategy"]["sharpe"])
+        return self._curve("sharpe")
 
     @property
     def closed_trades(self) -> int:
+        if self.kind == KIND_BASKET:
+            return int(sum(leg["trades"] for leg in self.metrics["legs"].values()))
         return int(self.metrics["closed_trades"])
+
+    @property
+    def bars(self) -> int:
+        """How many bars the entry covers, across every series it holds."""
+        if self.kind == KIND_BASKET:
+            return int(sum(leg.bars for leg in self.legs.values()))
+        return int(self.data.bars) if self.data else 0
+
+    @property
+    def coverage(self) -> str:
+        """The symbol column of the report: one series, or how many legs a basket has."""
+        if self.kind == KIND_BASKET:
+            return f"{len(self.legs)} legs"
+        return self.data.symbol if self.data else "?"
 
     @property
     def params_text(self) -> str:
@@ -246,6 +301,171 @@ def entry_for(
         metrics=result.as_dict(),
         note=note,
         trades_file=trades_file,
+    )
+
+
+def _performance_dict(performance) -> dict:
+    """The comparable numbers of one curve, with no lists inside so `compare` can walk it."""
+    return {
+        "total_return": performance.total_return,
+        "cagr": performance.cagr,
+        "ann_vol": performance.ann_vol,
+        "sharpe": performance.sharpe,
+        "max_dd": performance.max_dd,
+        "years": performance.years,
+        "final_equity": performance.final_equity,
+    }
+
+
+def basket_metrics(result) -> dict:
+    """The numbers a basket entry is verified against.
+
+    Only floats and nested dicts: `compare` walks dicts, so a list (the legs of a result, say)
+    would be compared as one opaque leaf and always look different.
+    """
+    return {
+        "return": _performance_dict(result.performance),
+        "benchmark": _performance_dict(result.benchmark),
+        "fees_paid": result.fees_paid,
+        "legs": {
+            leg.symbol: {
+                "total_return": leg.performance.total_return,
+                "sharpe": leg.performance.sharpe,
+                "trades": leg.trades,
+                "exposure": leg.exposure,
+                "fees": leg.fees,
+                "contribution": leg.contribution,
+            }
+            for leg in result.legs
+        },
+    }
+
+
+def basket_entry_for(
+    result,
+    series: dict[str, list[Bar]],
+    timeframe: str,
+    *,
+    window: dict | None = None,
+    costs_by_symbol: dict | None = None,
+    note: str = "",
+    trades_file: str | None = None,
+    recorded_at: str | None = None,
+):
+    """Build the journal entry for a finished basket run.
+
+    `series` is what the run actually saw — every leg's full history, including the warm-up
+    before the reported window — because that is what has to come back byte for byte for the
+    entry to be checkable later. The window itself is in `result.times`.
+    """
+    recorded_at = recorded_at or utc_now()
+    # the label of a basket has spaces and brackets in it, which makes an id awkward to type
+    # into `kcs-journal verify --id`, so the id is built from what identifies the run instead
+    return RunEntry(
+        run_id=(
+            f"{compact_stamp(recorded_at)}-basket-{timeframe}-{len(series)}legs"
+        ),
+        recorded_at=recorded_at,
+        label=result.label,
+        strategy=result.strategy,
+        params=dict(result.params),
+        costs={
+            "fee_per_side": result.costs.fee_per_side,
+            "slippage_per_side": result.costs.slippage_per_side,
+        },
+        metrics=basket_metrics(result),
+        legs={
+            symbol: DataWindow.of(
+                bars, data.data_quality(bars, timeframe), symbol, timeframe
+            )
+            for symbol, bars in series.items()
+        },
+        window=dict(window or {}),
+        leg_costs={
+            symbol: {
+                "fee_per_side": cost.fee_per_side,
+                "slippage_per_side": cost.slippage_per_side,
+            }
+            for symbol, cost in (costs_by_symbol or {}).items()
+        },
+        kind=KIND_BASKET,
+        note=note,
+        trades_file=trades_file,
+    )
+
+
+def verify_basket(
+    entry: RunEntry,
+    data_dir: Path | str = data.DEFAULT_DATA_DIR,
+    tolerance: float = TOLERANCE,
+) -> Verification:
+    """Re-run a basket entry leg by leg and compare its numbers."""
+    from .basket import run_basket
+
+    verified_at = utc_now()
+    combined_recorded = "|".join(
+        f"{symbol}:{leg.digest}" for symbol, leg in sorted(entry.legs.items())
+    )
+    series: dict[str, list[Bar]] = {}
+    actual_digests: list[str] = []
+    data_changed = False
+    timeframe = next(iter(entry.legs.values())).timeframe if entry.legs else ""
+
+    for symbol, leg in sorted(entry.legs.items()):
+        try:
+            bars = data.load_series(data_dir, symbol, leg.timeframe)
+        except (FileNotFoundError, ValueError) as error:
+            return Verification(
+                run_id=entry.run_id, verified_at=verified_at, status=STATUS_ERROR,
+                bars=0, digest_recorded=combined_recorded, digest_actual="",
+                message=f"{symbol}: {error}",
+            )
+        sliced = window_of(bars, leg.first, leg.last)
+        if not sliced:
+            return Verification(
+                run_id=entry.run_id, verified_at=verified_at, status=STATUS_ERROR,
+                bars=0, digest_recorded=combined_recorded, digest_actual="",
+                message=f"{symbol}: the archive no longer holds {leg.first}..{leg.last}",
+            )
+        digest = fingerprint(sliced)
+        actual_digests.append(f"{symbol}:{digest}")
+        data_changed = data_changed or digest != leg.digest
+        series[symbol] = sliced
+
+    digest_actual = "|".join(actual_digests)
+    costs = engine.Costs(
+        fee_per_side=entry.costs["fee_per_side"],
+        slippage_per_side=entry.costs["slippage_per_side"],
+    )
+    try:
+        result = run_basket(
+            series, entry.strategy, entry.params, timeframe, costs=costs, label=entry.label,
+            window=entry.window.get("seconds"), since=entry.window.get("since"),
+            costs_by_symbol={
+                symbol: engine.Costs(**leg) for symbol, leg in entry.leg_costs.items()
+            } or None,
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        return Verification(
+            run_id=entry.run_id, verified_at=verified_at, status=STATUS_UNKNOWN_STRATEGY,
+            bars=sum(len(bars) for bars in series.values()),
+            digest_recorded=combined_recorded, digest_actual=digest_actual,
+            message=f"cannot rebuild the basket: {error}",
+        )
+
+    mismatches = compare(entry.metrics, basket_metrics(result), tolerance=tolerance)
+    if mismatches:
+        status, message = STATUS_MISMATCH, f"{len(mismatches)} field(s) differ"
+    elif data_changed:
+        status = STATUS_DATA_CHANGED
+        message = "metrics reproduce, but the stored bars are not the ones recorded"
+    else:
+        status, message = STATUS_VERIFIED, "every leg and every metric reproduces exactly"
+    return Verification(
+        run_id=entry.run_id, verified_at=verified_at, status=status,
+        bars=sum(len(bars) for bars in series.values()),
+        digest_recorded=combined_recorded, digest_actual=digest_actual,
+        mismatches=mismatches, message=message, tolerance=tolerance,
     )
 
 
@@ -355,6 +575,9 @@ def verify(
     were), `unknown-strategy` (the registry lost the strategy) or `mismatch`
     (the same inputs no longer produce the same output).
     """
+    if entry.kind == KIND_BASKET:
+        return verify_basket(entry, data_dir, tolerance)
+
     verified_at = utc_now()
     try:
         bars = data.load_series(data_dir, entry.data.symbol, entry.data.timeframe)
@@ -548,8 +771,8 @@ def report_lines(
         verification = statuses.get(entry.run_id)
         mark = STATUS_MARK.get(verification.status, "—") if verification else "—"
         lines.append(
-            f"{entry.run_id[:29]:<30}{entry.label[:17]:<18}{entry.data.symbol:<11}"
-            f"{entry.data.bars:>7}{pct(entry.total_return):>11}{pct(entry.cagr):>9}"
+            f"{entry.run_id[:29]:<30}{entry.label[:17]:<18}{entry.coverage:<11}"
+            f"{entry.bars:>7}{pct(entry.total_return):>11}{pct(entry.cagr):>9}"
             f"{pct(entry.max_dd):>9}{entry.sharpe:>8.2f}{entry.closed_trades:>8}{mark:>7}"
         )
     return lines
@@ -585,7 +808,9 @@ def show_lines(entry: RunEntry) -> list[str]:
         f"recorded     : {entry.recorded_at}",
         f"strategy     : {entry.strategy}({entry.params_text})",
         f"data         : {entry.data.symbol} {entry.data.timeframe}, {entry.data.bars:,} bars, "
-        f"digest {entry.data.digest[:16]}…",
+        f"digest {entry.data.digest[:16]}…" if entry.data else
+        f"data         : basket of {len(entry.legs)} legs, {entry.bars:,} bars, "
+        f"{next(iter(entry.legs.values())).timeframe}",
         f"costs        : fee {entry.costs['fee_per_side']:.4%}/side, "
         f"slippage {entry.costs['slippage_per_side']:.4%}/side",
     ]
