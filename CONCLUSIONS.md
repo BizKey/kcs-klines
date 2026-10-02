@@ -934,6 +934,39 @@ delistings (§4). The practical resolution is the one §1.1 already gave: **the 
 that a lookback does not have to be chosen at all**, and on this evidence using it with a
 *daily* base rather than the hourly default is the better default.
 
+### 1.13 The same rule on nine assets, out of sample
+
+Every coin the session looked at, run through the same harness (`kcs-walkforward --train 300
+--test 60`, parameters re-chosen on the past only, spot-only, 0.1%/side):
+
+| asset | splits / years | holding it | `sma` 50-200 | **`voltarget-sma`** | `tsmom` short lookback | `tsmom-blend` short base | `rsi-rev` |
+|---|---|---|---|---|---|---|---|
+| BTC | 49 / 8.1 | +999% (0.48) | +2,759% (0.97) | +493% (**1.19**, DD −23%) | +479% (0.46) | **+3,097% (1.13)** | — |
+| ADA | 39 / 6.4 | +388% (0.26) | +580% (0.43) | +101% (0.63, DD −37%) | **+2,485% (0.73)** | +1,712% (0.65) | +156% (0.29) |
+| ICP | 27 / 4.4 | −88% | −59% | **+12%** (0.15, DD −34%) | −35% | +8% | −58% |
+| APT | 19 / 3.1 | −88% | −22% | **+8%** (0.15, DD −31%) | −76% | +11% | −39% |
+| FET | 17 / 2.8 | −66% | +79% (0.27) | **+36%** (0.63, DD −21%) | +130% (0.46) | −18% | −5% |
+| FLR | 17 / 2.8 | −33% | +194% (0.60) | **+50%** (0.77, DD −13%) | +95% | +69% | +165% (0.83) |
+| SUI | 15 / 2.5 | −60% | +86% (0.40) | **+21%** (0.54, DD −17%) | −22% | +77% (0.38) | −16% |
+| WLD | 14 / 2.3 | −92% | +19% (0.09) | **+21%** (0.48, DD −16%) | — | — | +27% (0.18) |
+| SEI | 14 / 2.3 | −85% | −24% | **+4%** (0.10, DD −25%) | −38% | −1% | −35% |
+
+**`voltarget-sma` is positive on all nine assets** — the only rule in the table that is:
+with drawdowns of −13…−37% while the assets themselves fell 33-92% over the same stretches
+(its weakest result, +4% on SEI, is still 89 points better than holding that asset).
+Nothing else comes close to that consistency: `sma` ranged from +194% to −59%, the short-lookback
+`tsmom` from +2,485% to −76%, `rsi-rev` from +165% to −58%. The best *individual* numbers belong
+to those erratic rules (BTC's blend at +3,097%, ADA's TSMOM at +2,485%, FLR's `rsi-rev` at
++165%), and that is precisely the trap: a rule that is sometimes the best and sometimes the
+worst is a rule you cannot size.
+
+A practical reading: the recommended single-asset configuration is `voltarget-sma` with a
+50-200 bar trend window and a 25-40% volatility target — the boring one — and the more
+aggressive `tsmom`/`blend` variants are worth running only as a *second* book, sized for the
+−55…−85% drawdowns they show whenever they are wrong. All nine assets are also the same kind of
+asset (crypto that fell hard), on one survivorship-biased archive (§4), and the walk-forward
+still chooses parameters on the past, which is honest but is not a guarantee about the future.
+
 ## 2. Rejected by measurement
 
 Each of these was tested on this archive, with costs, and lost. Do not re-open

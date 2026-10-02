@@ -210,6 +210,17 @@ section that proves it. BTC-USDT, 0.1%/side, 2017-10 … 2026-09 unless noted.
 > information rather than just buying fewer names. The one discount left is the archive itself:
 > it has no delistings, which flatters any drawdown gate and an 840-name book especially (§4).
 
+### Nine assets, walked forward
+
+`kcs-walkforward --train 300 --test 60`, parameters chosen on the past only, spot-only, all
+with 0.1%/side: **`voltarget-sma` is positive on all nine assets** — BTC
++493% (Sharpe 1.19), ADA +101% (0.63), FLR +50% (0.77), FET +36% (0.63), WLD +21% (0.48), SUI
++21% (0.54), ICP +12% (0.15), APT +8% (0.15), SEI +4% (0.10) — with drawdowns of −13…−37%
+while the assets themselves fell 33-92% (its weakest result, SEI, is still 89 points better
+than holding that asset). Nothing else is consistent: `sma` spans +2,759% to −59%, the
+short-lookback `tsmom` +2,485% to −76%, `rsi-rev` +165% to −58%. The erratic rules own the best
+single numbers and the worst ones, which is why they cannot be sized (§1.13, §1.12).
+
 ### The landscape, on comparable windows
 
 | what | window | return | Sharpe | max DD |
