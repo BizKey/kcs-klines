@@ -881,6 +881,47 @@ stop's justification in §1.11 — "it helps where the strategy's own exit is fa
 only for the soft trigger. Add exits to control *your* risk tolerance, not to improve the
 strategy, and expect to pay for them in return.
 
+### 1.12 TSMOM's lookback on daily bars: the defaults mislead, and shorter is better
+
+`tsmom` counts `lookback` and `rebalance` in **bars**, so its defaults (720 and 168) are an
+hourly calibration: on daily data that is a two-year lookback reviewed every five and a half
+months. The 2025-26 runs showed the consequence — the strategy was a spectator (0.00% on SEI
+and WLD because it never decided, −67% on ADA against −71% for holding, because its one
+decision kept it in). Shortening the lookback is the obvious fix, and it works, but the
+in-sample "best" lookback differs per asset, which is the trap:
+
+| best in-sample lookback, 2025-10 → 2026-10 | BTC | SEI | WLD | ADA |
+|---|---|---|---|---|
+| the winner | 180/7: +3.1% | 360/30: +0.9% | **30/7: +40.6%** | **30/7: +12.3%** |
+| the hourly default (720/168) | −25.6% | −72.9% | 0.0% | −67.3% |
+
+Four assets, four different answers, and the default is the worst of them everywhere. So the
+question has to be asked out of sample, with parameters re-chosen on the past only
+(`kcs-walkforward --train 300 --test 60`):
+
+| walk-forward over the whole history | ADA (39 splits, 6.41 y) | BTC (49 splits, 8.06 y) |
+|---|---|---|
+| holding the asset | +387.98%, Sharpe 0.26, DD −95.4% | +999.03%, Sharpe 0.48, DD −76.9% |
+| `tsmom`, lookback 30-360 × rebalance 1/7 | **+2,484.55%, Sharpe 0.73**, DD −76.8% | +479.22%, Sharpe 0.46, DD −65.1% |
+| `tsmom-blend`, base 7-60 × rebalance 1/7 | +1,711.95%, Sharpe 0.65, DD −82.7% | **+3,096.60%, Sharpe 1.13**, DD −38.8% |
+| `sma`, window 50-200 (reference) | +579.55%, Sharpe 0.43, DD −85.1% | +2,758.78%, Sharpe 0.97, DD −56.5% |
+| `voltarget-sma` (reference) | +101.41%, Sharpe 0.63, **DD −36.6%** | +493.23%, **Sharpe 1.19**, **DD −23.1%** |
+
+**A shorter lookback is a real improvement, not a fit.** On ADA the short-lookback TSMOM
+compounds to +2,485% against +388% for holding, with a Sharpe of 0.73 against 0.26; on BTC the
+*honestly chosen* `tsmom-blend` with a short base is the best return of anything measured in
+this repository (+3,096% at Sharpe 1.13) and its drawdown is half of holding's.
+
+Three caveats, in order of importance. First, the **candidate set** (lookback 30-360, base
+7-60) was my choice, and a different set would move the result — the honest claim is "much
+shorter than 720 works out of sample", not "30 is the answer". Second, these are wild rides:
+drawdowns of −39% (BTC blend) to −83% (ADA blend) while the curves compound, so the useful
+comparison is against each strategy's own risk, and `voltarget-sma` still owns the best
+risk-adjusted result on BTC (Sharpe 1.19, DD −23%). Third, all of it is one archive with no
+delistings (§4). The practical resolution is the one §1.1 already gave: **the blend exists so
+that a lookback does not have to be chosen at all**, and on this evidence using it with a
+*daily* base rather than the hourly default is the better default.
+
 ## 2. Rejected by measurement
 
 Each of these was tested on this archive, with costs, and lost. Do not re-open

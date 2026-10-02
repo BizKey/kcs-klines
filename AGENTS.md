@@ -312,6 +312,17 @@ section that proves it. BTC-USDT, 0.1%/side, 2017-10 … 2026-09 unless noted.
   missing. The cost of the rule is therefore a **lower bound on the bias** — at least 17 points
   over five years — and it is the honest answer to "how much of this is survival": the +86%
   describes the pairs that lived.
+* **`tsmom`'s defaults are hourly; on daily bars they make it a spectator.** `lookback` and
+  `rebalance` count **bars** (720 and 168 = a month and a week on 1h, two years and five and a
+  half months on 1d), which is why it sat out SEI and WLD entirely and lost 67% on ADA while
+  "holding". Shortening it is a real out-of-sample improvement, not a fit: with parameters
+  re-chosen on the past only, `tsmom` lookback 30-360 × rebalance 1/7 gives ADA **+2,485%
+  against +388% for holding** (Sharpe 0.73 vs 0.26), and `tsmom-blend` with a base of 7-60 bars
+  is the best return measured anywhere in this repository on BTC (**+3,097% at Sharpe 1.13**,
+  drawdown −38.8% against holding's −76.9%). The in-sample "best" lookback differs per asset
+  (BTC 180, SEI 360, WLD 30, ADA 30), so do not read it off one series; drawdowns stay −39…−83%,
+  and `voltarget-sma` still has the best Sharpe on BTC (1.19 at −23%). The module docstring now
+  says all of this, and `tsmom-blend` remains the way to avoid choosing a lookback (§1.12).
 * **Two working habits that caught real bugs**: calibrate every hand-rolled backtest against
   `engine.py` on a rule both can run, and treat a sweep whose columns are identical — or a
   windowed result that equals the full one — as broken, not as a finding (§1.1, §3).

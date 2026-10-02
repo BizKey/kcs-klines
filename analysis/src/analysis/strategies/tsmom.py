@@ -138,7 +138,12 @@ def _tsmom(
     threshold: float = 0.0,
     **_: object,
 ) -> Strategy:
-    """Long while the price rose over N bars, decided once every M bars."""
+    """Long while the price rose over N bars, decided once every M bars.
+
+    The defaults are **hourly** (720 bars lookback, 168 bars rebalance). On daily bars use
+    about `lookback=30, rebalance=7`, or `tsmom-blend` with `base=7..60`, which needs no
+    lookback chosen at all.
+    """
     return Tsmom(lookback=lookback, rebalance=rebalance, mode=mode, threshold=threshold)
 
 
