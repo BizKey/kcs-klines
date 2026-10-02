@@ -14,6 +14,78 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 
+# --- what is actually being traded ------------------------------------------
+
+#: Symbols on this exchange that follow a **stock**, not a crypto asset. KuCoin
+#: lists tokenised equities beside its spot pairs: they trade like a pair, they are
+#: ranked by turnover like one, and they have nothing to do with the cross-section a
+#: crypto study means. An explicit list is used because the naming convention is not
+#: reliable — `AVAX` ends in X and is a coin, `4STOCK` does not end in X at all — and
+#: one test fails whenever an X-suffixed pair appears that is in neither this list nor
+#: `CRYPTO_X_SUFFIX_ALLOWLIST`, so a new listing forces a decision instead of sliding
+#: into a universe by turnover.
+TOKENISED_EQUITY_SYMBOLS = frozenset(
+    {
+        "AAPLX-USDT",  # Apple
+        "TSLAX-USDT",  # Tesla
+        "HOODX-USDT",  # Robinhood
+        "MSTRX-USDT",  # MicroStrategy
+        "CRCLX-USDT",  # Circle
+        "SPCXX-USDT",  # S&P 500
+        # Not an X-suffixed ticker, which is why the list is not a pattern: this one
+        # is named as a tokenised equity in `AGENTS.md` and has no other marking.
+        "4STOCK-USDT",
+    }
+)
+
+#: X-suffixed pairs that are ordinary crypto. Reviewed 2026-10-02; anything new
+#: fails the test in `tests/test_data.py` until it is added to one of the two sets.
+CRYPTO_X_SUFFIX_ALLOWLIST = frozenset(
+    {
+        "ADX-USDT", "ALEX-USDT", "ARX-USDT", "AVAX-USDT", "BDX-USDT", "CFX-USDT",
+        "CVX-USDT", "DYDX-USDT", "FLUX-USDT", "FRAX-USDT", "GHX-USDT", "GMRX-USDT",
+        "GMX-USDT", "HTX-USDT", "ICX-USDT", "IMX-USDT", "INX-USDT", "IOTX-USDT",
+        "LYX-USDT", "NATIX-USDT", "NAVX-USDT", "NEX-USDT", "PIX-USDT", "POLYX-USDT",
+        "PUNDIX-USDT", "SNX-USDT", "SPX-USDT", "STRAX-USDT", "STX-USDT", "TMX-USDT",
+        "TRX-USDT", "WEMIX-USDT", "WMTX-USDT", "ZRX-USDT",
+    }
+)
+
+
+def is_tokenised_equity(symbol: str) -> bool:
+    """Whether a symbol follows a stock rather than a crypto asset."""
+    return symbol.upper() in TOKENISED_EQUITY_SYMBOLS
+
+
+def split_equities(symbols: Iterable[str], exclude: bool) -> tuple[list[str], list[str]]:
+    """`(kept, equities_found)` for a universe, dropping the stock tokens when asked.
+
+    The second element is every stock token the universe held, whether or not it was
+    dropped: a book that keeps them still has to say so, which is what turns "do not
+    take them by accident" into something the report states out loud. Returning an
+    empty list when `exclude=False` (the first version of this function) made the
+    note silent exactly when it mattered.
+    """
+    ordered = list(symbols)
+    equities = [symbol for symbol in ordered if is_tokenised_equity(symbol)]
+    if not exclude:
+        return ordered, equities
+    return [symbol for symbol in ordered if not is_tokenised_equity(symbol)], equities
+
+
+def equities_note(equities: list[str], *, excluded: bool) -> str | None:
+    """One line naming the tokenised equities a universe kept or dropped."""
+    if not equities:
+        return None
+    shown = ", ".join(sorted(equities)[:6]) + (" …" if len(equities) > 6 else "")
+    if excluded:
+        return f"{len(equities)} tokenised equit{'y' if len(equities) == 1 else 'ies'} dropped: {shown}"
+    return (
+        f"{len(equities)} tokenised equit{'y' if len(equities) == 1 else 'ies'} in the universe "
+        f"(they follow stocks, not crypto): {shown} — --exclude-equities drops them"
+    )
+
+
 def repo_root() -> Path:
     """The checkout this package lives in, or the working directory as a fallback.
 

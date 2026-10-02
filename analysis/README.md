@@ -125,9 +125,11 @@ package is `analysis/src/analysis/` and its tests travel with it:
 analysis/
 ├── pyproject.toml          # this package: pyarrow, dev pytest, the console scripts
 ├── README.md
+├── experiments/            # scripts that audit the claims in CONCLUSIONS.md
 ├── out/                    # artifacts (gitignored)
 └── src/analysis/
     ├── data.py  metrics.py  engine.py  report.py  journal.py  run_backtest.py  basket.py
+    ├── dashboard.py + dashboard.html   # the local kline dashboard
     ├── strategies/         # one module per strategy + the registry
     └── tests/              # pytest suite, inside the package on purpose
 ```
@@ -178,6 +180,100 @@ uv add --package analysis --dev some-dev-tool   # a new dev dependency
 `uv sync` (or just the first `uv run`). Without uv, the equivalent is
 `python -m analysis.run_backtest` inside an environment that has `pyarrow`
 installed — the package itself is pip-installable from `analysis/`.
+
+## Looking at the data: `kcs-dashboard`
+
+The archive is 1.4 GB over a thousand symbols, so there is no chart in this repository
+you can just open: `kcs-dashboard` is a small local HTTP server that reads the Parquet on
+demand and one page that charts it. The charting itself is
+[TradingView Lightweight Charts](https://www.tradingview.com/lightweight-charts/)
+(Apache-2.0, v5.2.1), **vendored** in `src/analysis/vendor/` and served from
+`/vendor/lightweight-charts.js` — no CDN, no build step, no dependency beyond `pyarrow`.
+That is deliberate: the first version of this dashboard drew its own candles on a canvas,
+and every complaint it collected (a clipped right edge, axes that were not controls, a view
+that changed type under the wheel) was a charting engine being reimplemented badly.
+
+```bash
+uv run kcs-dashboard                 # http://127.0.0.1:8765
+uv run kcs-dashboard --port 9000 --open
+uv run kcs-dashboard --export BTC-USDT,1h --out btc.html    # one self-contained file
+```
+
+* **Sidebar** — every symbol with a series of the chosen timeframe: last price, change and
+  median turnover. The percentage column **follows the timeframe**: by default it is one bar
+  of whatever is selected (a day on the daily chart, an hour on the hourly one), and the
+  selector next to the sort box widens it to 24h, 7d, 30d or 1y — with the label above the
+  list saying which, and the bar count, so a 30-day move is never read as a daily one. The
+  same window drives the quote in the toolbar. It sorts by turnover, by change or by name, and a
+  minimum-turnover box hides the thin pairs — the archive's own findings say liquidity
+  decides most of what happens to a small book, so it is a dial rather than a footnote. The
+  search box filters it — and it understands the quote the way the list writes it: `/usdt`
+  returns every USDT pair (842 of them), `/btc` every pair quoted in bitcoin, `tel/btc` and
+  `tel-btc` both find `TEL-BTC`, two words mean "and", and it matches anywhere in the symbol.
+  `/` focuses the box, `↑`/`↓` walk the list. 998 symbols load in about a
+  second, because only the newest partition of each series is read for the summary.
+* **Chart** — candles with wicks, volume underneath, wheel to zoom about the cursor (~13% a
+  tick), drag to pan, shift+wheel or a trackpad's two-finger swipe to pan as well,
+  double-click to reset, crosshair with the OHLC/volume readout, arrows and `+`/`-` from the
+  keyboard. Switching the timeframe deliberately starts that timeframe on its own default
+  window rather than keeping the old one. It opens on roughly 1.4 px per bar (about 800 bars on a wide screen),
+  so the history is visible at once instead of the chart sitting parked at the right edge.
+  The **display style** is a switch in the toolbar: `candles` (the default), `bars` (OHLC
+  bars: wick with an open tick left and a close tick right), `line`, and `auto`. The three
+  named styles are fixed — zooming changes only the zoom — while `auto` follows it, drawing
+  candlesticks while a bar is at least ~3 px wide and a line when it is not, and its button
+  says which of the two it picked. `auto` is not the default on purpose: with it the wheel
+  silently turns candlesticks into a line and back, which reads as the chart changing type
+  under your hand. `s` cycles the four; the choice is kept in the URL
+  (`#symbol=BTC-USDT&timeframe=1h&style=bars`). Bars are aggregated into buckets when the
+  window is wider than the pixels, at any style.
+* **The library does the chart work**: axes as controls (drag or wheel either one), crosshair
+  with the OHLC readout in the top-left legend, a price scale that measures its own labels,
+  exponential prices for the very cheap pairs, volume with K/M/B/T/P suffixes, logarithmic
+  mode, and a saved `--export` file that carries both the data and the renderer.
+* **The old renderer is still there** at `/canvas` (`dashboard-canvas.html`). It is the
+  fallback for the day the vendored library cannot be used, and it is the only page
+  `analysis/experiments/render_check.mjs` can execute headlessly — the library page needs a
+  real DOM, which the test environment does not have. Its contract with the bundle is
+  checked statically instead: `tests/test_dashboard.py` fails if the page uses an API this
+  build does not export.
+* **Both axes are controls.** The right-hand scale is the vertical navigator: drag it up or
+  down, or wheel over it, to stretch or squeeze the price range — the price under the cursor
+  stays put and the time range does not move — and double-click it to fit the range to the
+  data again. The bottom scale does the same for time (drag right to see more history), and
+  the cursor changes to `ns-resize` / `ew-resize` over either of them. Dragging the plot
+  itself still pans. A new symbol or timeframe starts from a fitted price scale.
+* **The right-hand scale measures itself** and prices outside a normal decimal band are
+  printed in exponential form, so a token priced at 4e-10 reads as `4.777e-9` rather than a
+  column of `0.00000000` — the library handles the width, the page supplies the formatting
+  and the per-series `priceFormat`.
+* **Overlays** — SMA 20/50/200, and RSI(14) and MACD(12/26/9) as their own panes (the
+  library's panes, so they resize and scroll with the chart). The price scale switches
+  between `$`, `%` and `log`. Indicators and style are computed in the page from the loaded
+  bars, in one place, so there is no second implementation of a rule to disagree with
+  Python's.
+* **URL state** — `#symbol=BTC-USDT&timeframe=1h&style=bars&scale=log`, so a chart can be
+  linked or bookmarked; the sort order, filters and indicators are remembered locally.
+* **Getting the picture out** — `png` saves the chart exactly as drawn (the library's own
+  screenshot, no server involved), `csv` saves the bars currently on screen, and `live`
+  re-reads the newest bars every 30 s, because the archive grows while you watch.
+* **What the archive knows about the pair** — a line under the chart from `/api/stats`: bar
+  count and years of history, the median absolute bar return, the median turnover, and the
+  **modelled spread** from the same Corwin-Schultz estimator the backtests charge costs
+  with, measured on the hourly series when one exists (it reads BTC at 5.6 bp a side there,
+  which is the number `CONCLUSIONS.md` quotes). It also warns when a series ends days before
+  its own files do, which is the WMTX case.
+* **History** — the page loads the newest 5,000 bars and walks backwards in pages as you
+  pan left; `All` asks the server for the whole series in one request (up to 200k bars, and
+  the drawing downsamples), and `series_bars` in the status line says how many exist. The
+  range buttons stay highlighted for whatever window is on screen, including after a manual
+  zoom or pan.
+
+The routes are four: `GET /api/index?timeframe=1d` (the sidebar rows), `GET
+/api/bars?symbol=&timeframe=&bars=&end=` (parallel arrays, newest last), `GET
+/api/stats?symbol=&timeframe=` (the numbers above) and `GET /api/export?...` (the page with
+its renderer and data inlined). A symbol that is not in the archive is a
+`400` — it is looked up in the listing rather than joined into a path.
 
 ## Five ways to ask a question
 

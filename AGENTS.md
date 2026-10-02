@@ -16,19 +16,23 @@ place is, and what has already been learned the hard way.
   that decide an outcome, what was tested and rejected, the mistakes this project
   made and fixed, what is not modelled, and what to do next. Read it before acting
   on any number from this repository.
-* **`journal/`** — append-only JSONL run records, **tracked in git on purpose**. It holds
-  one entry: the recommended configuration from `CONCLUSIONS.md` §1.4-1.5a, recorded by
-  `kcs-basket --journal` (a *basket* entry: per-leg windows and digests, the reported window,
-  and the per-leg spread costs), re-checkable with
-  `uv run kcs-journal verify --id 20261002T081142Z`.
+* **`journal/`** — append-only JSONL run records, **tracked in git on purpose**. It holds the
+  headline results: the recommended configuration from `CONCLUSIONS.md` §1.4-1.5a with and
+  without the spread model (two *basket* entries, each storing per-leg windows and digests),
+  and the two single-asset winners on BTC (`voltarget-sma`, `tsmom-blend`). Every entry is
+  re-checked with `uv run kcs-journal verify`, which re-runs it and compares every metric and
+  every trade.
 * `data/` (1.4 GB, **998 symbols / 4,990 series** — every symbol now has all five
   timeframes, gitignored) is the archive. It is
   **alive**: a collector run can append bars while you are working. Two things to know
   about what is in it. First, the exchange now lists **tokenised equities** alongside
-  crypto (`AAPLX-USDT` near $338, `HOODX-USDT` near $119, `4STOCK-USDT`): they trade like
-  spot pairs but follow stocks, and every universe in this repository selects by turnover
-  without knowing the difference — include them on purpose or filter them, but do not
-  take them by accident. Second, `WMTX-USDT` lags the collector persistently (a week
+  crypto (`AAPLX-USDT`, `TSLAX-USDT`, `HOODX-USDT`, `MSTRX-USDT`, `CRCLX-USDT`, `SPCXX-USDT`,
+  `4STOCK-USDT`): they trade like spot pairs but follow stocks, so a turnover-ranked universe
+  picks them up without knowing the difference. `kcs-portfolio`, `kcs-basket` and
+  `kcs-riskparity` now take `--exclude-equities` and **name any they keep** in the report;
+  `data.TOKENISED_EQUITY_SYMBOLS` is the list, and a test fails whenever an X-suffixed pair
+  appears that is neither on it nor on `CRYPTO_X_SUFFIX_ALLOWLIST` — a coin like `AVAX` ends
+  in X, so the suffix alone cannot decide. Second, `WMTX-USDT` lags the collector persistently (a week
   behind on both 1h and 1d as of 2026-10-01) — worth a targeted `kcs-klines` sync, since
   every other series is current and the daily calendar ends on the newest bar available.
 
@@ -39,9 +43,10 @@ place is, and what has already been learned the hard way.
 | `src/` | Rust collector: `kucoin/client.rs`, `storage/parquet_store.rs`, `collector.rs`, `verify.rs`, `status.rs` |
 | `tests/` | Rust tests; `live_api.rs` is `--ignored` and hits the real exchange |
 | `analysis/src/analysis/` | `data.py` `metrics.py` `engine.py` `report.py` `journal.py` `walkforward.py` `portfolio.py` `basket.py` `riskparity.py` `run_backtest.py`, `strategies/`, `tests/` |
-| `analysis/src/analysis/tests/` | 472 pytest tests (engine invariants, registry-wide strategy checks, CLI, journal, walk-forward, portfolio, basket, real-data regression) |
+| `analysis/src/analysis/tests/` | 510 pytest tests (engine invariants, registry-wide strategy checks, CLI, journal, walk-forward, portfolio, basket, real-data regression) |
 | `analysis/out/` | artifacts (CSV/JSON/SVG), gitignored |
 | `analysis/README.md` | the toolkit in detail; `journal/README.md` the journal format |
+| `analysis/src/analysis/dashboard.py` + `dashboard.html` | the local kline dashboard: a stdlib HTTP server over the Parquet, charted with **vendored** TradingView Lightweight Charts (Apache-2.0, `vendor/`); `/canvas` serves the old hand-written renderer |
 | root `README.md` | the collector in detail (KuCoin API traps, schema, scheduling) |
 
 ## Commands
@@ -49,7 +54,7 @@ place is, and what has already been learned the hard way.
 ```bash
 cargo test && cargo clippy --all-targets      # Rust
 uv sync                                       # Python env (installs the analysis member)
-uv run pytest                                 # 472 tests, ~35 s
+uv run pytest                                 # 510 tests, ~45 s
 uv run kcs-backtest --list                    # 22 registered strategies + their parameters
 uv run kcs-backtest --strategy tsmom --param lookback=720 --param rebalance=168
 uv run kcs-backtest --symbol WLD-USDT --last 1y --strategy volfilter-sma --param window=50 --param max_vol=0.8 --param vol_window=30
@@ -66,6 +71,10 @@ uv run kcs-portfolio --timeframe 1d --lookback 30 --rebalance 30 --top 0.2
 uv run kcs-portfolio --timeframe 1d --lookback 30 --rebalance 30 --select sign --threshold 0
 uv run kcs-portfolio --timeframe 1d --lookback 7 --rebalance 7 --select sign --trend-gate 200
 uv run kcs-portfolio --timeframe 1d --lookback 7 --rebalance 7 --select sign --trend-gate 200 --vol-target 25%
+uv run kcs-dashboard                          # browse the archive: candles, volume, 998 symbols
+uv run kcs-dashboard --export BTC-USDT,1h --out btc.html   # one self-contained chart file
+uv run python analysis/experiments/verify_conclusions.py --quick   # do the quoted numbers still hold?
+uv run kcs-basket --symbols BTC-USDT,ETH-USDT --exclude-equities   # drop tokenised stocks from a universe
 uv run kcs-basket --select-turnover 10 --timeframe 1d --strategy voltarget-sma --param window=50 --param target_vol=0.30 --last 5y
 uv run kcs-basket --select-turnover 10 --timeframe 1d --strategy voltarget-sma --param window=50 --param target_vol=0.30 --last 5y --spread-model corwin-schultz
 uv run kcs-basket --select-turnover 10 --timeframe 1d --strategy voltarget-sma --param window=50 --param target_vol=0.30 --last 5y --spread-model corwin-schultz --journal
@@ -342,7 +351,10 @@ single numbers and the worst ones, which is why they cannot be sized (§1.13, §
   re-chosen on the past only, `tsmom` lookback 30-360 × rebalance 1/7 gives ADA **+2,485%
   against +388% for holding** (Sharpe 0.73 vs 0.26), and `tsmom-blend` with a base of 7-60 bars
   is the best return measured anywhere in this repository on BTC (**+3,097% at Sharpe 1.13**,
-  drawdown −38.8% against holding's −76.9%). The in-sample "best" lookback differs per asset
+  drawdown −38.8% against holding's −76.9%) — **but that multiple no longer reproduces**:
+  re-run on 2026-10-02 the same harness gives +1,234% at Sharpe 0.93 (`base=7`), and the walk-
+  forward figures have not had the re-measurement the portfolio ones got (see
+  `analysis/experiments/README.md`, "Open discrepancies"). The in-sample "best" lookback differs per asset
   (BTC 180, SEI 360, WLD 30, ADA 30), so do not read it off one series; drawdowns stay −39…−83%,
   and `voltarget-sma` still has the best Sharpe on BTC (1.19 at −23%). **It also does not
   transfer everywhere**: on SUI-USDT the plain short-lookback TSMOM *lost* 21.66% out of sample

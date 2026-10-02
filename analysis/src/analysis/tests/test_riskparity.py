@@ -784,3 +784,17 @@ def test_a_window_counts_the_commission_an_exit_paid(tmp_path: Path):
     assert inside_exits > 0
     rebalance_only = sum(r.cost for r in windowed.rebalances) / base
     assert windowed.fees_paid > rebalance_only
+
+
+def test_cli_drops_tokenised_equities_when_asked(tmp_path: Path, capsys):
+    root = archive(tmp_path, {
+        "AAA-USDT": [100.0 + i * 0.5 for i in range(400)],
+        "AAPLX-USDT": [330.0 + (i % 7) for i in range(400)],
+    })
+    code = riskparity.main([
+        "--data-dir", str(root), "--calendar", "AAA-USDT", "--top", "2",
+        "--min-history", "30d", "--no-artifacts", "--exclude-equities",
+    ])
+    printed = capsys.readouterr().out
+    assert code == 0
+    assert "dropped: AAPLX-USDT" in printed

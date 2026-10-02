@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 import pytest
 
 from .. import data
+from ..data import is_tokenised_equity, split_equities
 from .conftest import START, make_bars
 
 
@@ -155,3 +156,50 @@ def test_a_duration_that_makes_no_sense_is_rejected():
     for text in ("", "1", "y", "1y2", "soon", "5 parsecs", "-3d"):
         with pytest.raises(ValueError, match="cannot read"):
             data.parse_duration(text)
+
+
+# --- what is actually being traded ------------------------------------------
+
+
+def test_tokenised_equities_are_recognised_and_crypto_is_not():
+    for symbol in (
+        "AAPLX-USDT", "TSLAX-USDT", "HOODX-USDT", "MSTRX-USDT", "CRCLX-USDT",
+        "SPCXX-USDT", "4STOCK-USDT",
+    ):
+        assert is_tokenised_equity(symbol), symbol
+    # The naming convention would get these wrong, which is why the list is explicit:
+    # `AVAX` and `TRX` end in X and are coins, `4STOCK` is a stock token with no X.
+    for symbol in ("AVAX-USDT", "TRX-USDT", "STX-USDT", "WMTX-USDT", "BTC-USDT"):
+        assert not is_tokenised_equity(symbol), symbol
+
+
+def test_split_equities_always_names_them_and_only_drops_them_when_asked():
+    universe = ["BTC-USDT", "AAPLX-USDT", "ETH-USDT"]
+    kept, found = split_equities(universe, exclude=False)
+    assert kept == universe, "keeping them must not narrow the universe"
+    assert found == ["AAPLX-USDT"], "and the caller still has to be able to report them"
+    kept, found = split_equities(universe, exclude=True)
+    assert kept == ["BTC-USDT", "ETH-USDT"]
+    assert found == ["AAPLX-USDT"]
+
+
+def test_every_x_suffixed_pair_is_classified_one_way_or_the_other(data_dir):
+    """A new listing on this exchange must not slide into a universe unnoticed.
+
+    The exchange names tokenised equities with an X suffix *and* names coins that
+    way (`AVAX`, `TRX`), so neither the suffix nor the price can decide it. This
+    test lists every X-suffixed USDT pair in the archive and fails when one is in
+    neither `TOKENISED_EQUITY_SYMBOLS` nor `CRYPTO_X_SUFFIX_ALLOWLIST`: whoever
+    adds a pair then has to say which it is.
+    """
+    symbols = [symbol for symbol, _ in data.available_series(data_dir) if symbol.endswith("X-USDT")]
+    assert symbols, "the archive should hold X-suffixed pairs for this test to mean anything"
+    unclassified = sorted(
+        symbol
+        for symbol in symbols
+        if symbol not in data.TOKENISED_EQUITY_SYMBOLS and symbol not in data.CRYPTO_X_SUFFIX_ALLOWLIST
+    )
+    assert not unclassified, (
+        f"unclassified X-suffixed pairs: {unclassified}. Add each to "
+        "TOKENISED_EQUITY_SYMBOLS (a stock token) or CRYPTO_X_SUFFIX_ALLOWLIST (a coin)."
+    )

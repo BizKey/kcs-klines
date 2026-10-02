@@ -1265,6 +1265,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="with --select sign: the trailing return a symbol must beat, e.g. 0 or 5%% (default: %(default)s)",
     )
     parser.add_argument("--mode", default="long-only", choices=("long-only", "long-short"))
+    parser.add_argument(
+        "--exclude-equities",
+        action="store_true",
+        help="drop tokenised equities (AAPLX, TSLAX, ...) from the universe; they trade "
+        "like pairs but follow stocks, and the report names any it kept",
+    )
     parser.add_argument("--fee", type=float, default=0.001)
     parser.add_argument("--slippage", type=float, default=0.0)
     parser.add_argument(
@@ -1411,6 +1417,7 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit(str(error)) from error
     every = universes(args.data_dir, args.timeframe, quotes=None)
     symbols = universes(args.data_dir, args.timeframe, limit=args.limit, quotes=quotes)
+    symbols, equities = data.split_equities(symbols, args.exclude_equities)
     skipped = len(every) - len(symbols if args.limit is None else
                               universes(args.data_dir, args.timeframe, quotes=quotes))
     if len(symbols) < 2:
@@ -1521,6 +1528,8 @@ def main(argv: list[str] | None = None) -> int:
         skipped_pairs=skipped,
     )
     result.pairs = pair_stats(result, panels, dates)
+    if note := data.equities_note(equities, excluded=args.exclude_equities):
+        print(note)
     print(render(result, dates))
     if args.pairs_csv:
         write_pairs(args.pairs_csv, result, panels, dates)

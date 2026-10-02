@@ -1092,6 +1092,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
              "history before it)",
     )
     parser.add_argument("--calendar", default=DEFAULT_CALENDAR, help="symbol whose bars define the schedule")
+    parser.add_argument(
+        "--exclude-equities",
+        action="store_true",
+        help="drop tokenised equities (AAPLX, TSLAX, ...) from the universe; they trade "
+        "like pairs but follow stocks, and the report names any it kept",
+    )
     parser.add_argument("--fee", type=float, default=0.001, help="commission per side (default: %(default)s)")
     parser.add_argument("--slippage", type=float, default=0.0, help="extra cost per side (default: %(default)s)")
     parser.add_argument("--data-dir", type=Path, default=DATA_DIR)
@@ -1152,6 +1158,9 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit(f"{args.calendar}: {exc}") from None
     calendar = calendar_series.times
     symbols = sorted(symbol for symbol, tf in data.available_series(args.data_dir) if tf == args.timeframe)
+    symbols, equities = data.split_equities(symbols, args.exclude_equities)
+    if note := data.equities_note(equities, excluded=args.exclude_equities):
+        print(note)
     print(f"reading {len(symbols)} {args.timeframe} series ({len(calendar):,} bars on the calendar)…")
 
     aligned = {args.calendar: align(calendar_series, calendar, MAX_AGE_DAYS)}

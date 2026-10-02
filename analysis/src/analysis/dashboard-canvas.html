@@ -1,0 +1,994 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kcs-dashboard — klines</title>
+<style>
+  :root {
+    --bg: #0e1116;
+    --panel: #141922;
+    --line: #232a36;
+    --text: #d7dde7;
+    --muted: #7c8798;
+    --up: #26a69a;
+    --down: #ef5350;
+    --accent: #4c8dff;
+    --sma20: #f5c542;
+    --sma50: #4c8dff;
+    --sma200: #c084fc;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+               font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  #app { display: flex; height: 100%; }
+
+  /* ---- sidebar ---- */
+  #sidebar { width: 290px; min-width: 290px; background: var(--panel);
+             border-right: 1px solid var(--line); display: flex; flex-direction: column; }
+  #sidebar header { padding: 10px 12px; border-bottom: 1px solid var(--line); }
+  #sidebar h1 { font-size: 13px; margin: 0 0 8px; font-weight: 600; letter-spacing: .04em; }
+  #sidebar h1 span { color: var(--muted); font-weight: 400; }
+  input[type=search] { width: 100%; background: #0b0f15; color: var(--text);
+                       border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font: inherit; }
+  input[type=search]:focus { outline: 1px solid var(--accent); }
+  #tfs { display: flex; gap: 4px; margin-top: 8px; }
+  #tfs button, #ranges button, #tools button, #styles button {
+    background: #1b2130; color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: 3px 8px; font: inherit; cursor: pointer;
+  }
+  #tfs button.on, #ranges button.on, #tools button.on, #styles button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  #styles { display: flex; gap: 4px; margin-left: auto; }
+  #list { overflow-y: auto; flex: 1; }
+  .row { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px;
+         padding: 5px 12px; border-bottom: 1px solid #1a2029; cursor: pointer; }
+  .row:hover { background: #1a2130; }
+  .row.on { background: #1e2a44; }
+  .row .sym { font-weight: 600; }
+  .row .px { text-align: right; }
+  .row .sub { color: var(--muted); font-size: 11px; }
+  .row .chg { text-align: right; font-size: 11px; }
+  .up { color: var(--up); } .down { color: var(--down); }
+
+  /* ---- chart ---- */
+  main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  #toolbar { display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+             padding: 8px 14px; border-bottom: 1px solid var(--line); }
+  #title { font-size: 15px; font-weight: 600; }
+  #quote { color: var(--muted); }
+  #ranges, #tools { display: flex; gap: 4px; }
+  #tools { display: flex; gap: 4px; }
+  #chart { flex: 1; width: 100%; display: block; cursor: crosshair; }
+  #status { padding: 4px 14px; color: var(--muted); font-size: 11px; min-height: 20px;
+            border-top: 1px solid var(--line); }
+  #notice { padding: 6px 14px; color: var(--sma20); font-size: 12px; display: none; }
+</style>
+</head>
+<body>
+<div id="app">
+  <aside id="sidebar">
+    <header>
+      <h1>kcs-dashboard <span id="src"></span></h1>
+      <input id="search" type="search" placeholder="search symbol…" autocomplete="off">
+      <div id="tfs"></div>
+    </header>
+    <div id="list"></div>
+  </aside>
+  <main>
+    <div id="toolbar">
+      <span id="title">—</span>
+      <span id="quote"></span>
+      <div id="ranges"></div>
+      <div id="styles">
+        <button data-style="auto" title="follow the zoom: candles while there is room, a line when there is not">auto</button>
+        <button data-style="candles" title="always candlesticks">candles</button>
+        <button data-style="bars" title="always OHLC bars">bars</button>
+        <button data-style="line" title="always the close line">line</button>
+      </div>
+      <div id="tools">
+        <button data-sma="20">SMA20</button>
+        <button data-sma="50">SMA50</button>
+        <button data-sma="200">SMA200</button>
+        <button id="log">log</button>
+        <button id="reset">reset</button>
+      </div>
+    </div>
+    <div id="notice"></div>
+    <canvas id="chart"></canvas>
+    <div id="status"></div>
+  </main>
+</div>
+
+<script>window.__DATA__ = null;</script>
+<script>
+"use strict";
+
+/* ------------------------------------------------------------------ state */
+const STATIC = window.__DATA__ || null;          // set by --export
+const TF = ["1h", "4h", "1d", "1w", "1mon"];
+const PAGE_BARS = 5000;                          // bars per API request
+const STYLES = ["auto", "candles", "bars", "line"];
+const RANGES = [
+  ["1M", 30 * 86400], ["3M", 91 * 86400], ["1Y", 365 * 86400],
+  ["3Y", 3 * 365 * 86400], ["All", null],
+];
+
+const state = {
+  timeframe: "1d",
+  symbol: null,
+  series: null,          // {t,o,h,l,c,v,symbol,timeframe,more,series_bars}
+  index: [],
+  view: null,            // {from, to} as indices into series
+  log: false,
+  // The default is a *fixed* view on purpose. `auto` follows the zoom, which means the
+  // wheel silently changes candlesticks into a line and back — the report that produced
+  // this comment: "why do the bar types change when I scroll?". `auto` is still there for
+  // whoever wants it, as a deliberate choice.
+  style: "candles",      // candles | bars | line | auto
+  sma: new Set(),
+  hover: null,           // bar index under the cursor
+  drag: null,            // horizontal pan of the time axis
+  dragAxis: null,        // vertical drag of the price scale
+  dragTime: null,        // horizontal drag of the time scale
+  //: Set once the price scale is dragged or wheeled; `null` means "fit the data".
+  priceView: null,
+  loading: false,
+};
+
+const el = (id) => document.getElementById(id);
+const chart = el("chart");
+const ctx = chart.getContext("2d");
+
+/* -------------------------------------------------------------- formatting */
+function fmtPrice(value) {
+  if (value == null) return "—";
+  const abs = Math.abs(value);
+  // Fixed decimals collapse a token priced at 4e-10 into "0.00000000", which made the
+  // whole price axis read zero for the cheap pairs; outside a sane decimal band, say it
+  // in exponential form instead, and keep it short enough for the right-hand scale.
+  if (abs !== 0 && (abs < 1e-4 || abs >= 1e7)) return value.toExponential(3);
+  const digits = abs >= 1000 ? 2 : abs >= 10 ? 2 : abs >= 1 ? 4 : abs >= 0.01 ? 5 : 6;
+  return value.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: digits });
+}
+function fmtCompact(value) {
+  if (value == null) return "—";
+  const abs = Math.abs(value);
+  // Volume is in base units, and a token at 4e-10 trades in quadrillions of them: without
+  // the larger suffixes the label read "3550689.07B" and ran off the canvas.
+  if (abs >= 1e18) return (value / 1e18).toFixed(1) + "E";
+  if (abs >= 1e15) return (value / 1e15).toFixed(1) + "P";
+  if (abs >= 1e12) return (value / 1e12).toFixed(2) + "T";
+  if (abs >= 1e9) return (value / 1e9).toFixed(2) + "B";
+  if (abs >= 1e6) return (value / 1e6).toFixed(2) + "M";
+  if (abs >= 1e3) return (value / 1e3).toFixed(1) + "K";
+  return abs >= 1 ? value.toFixed(2) : value.toExponential(2);
+}
+function fmtPercent(value, digits = 2) {
+  if (value == null) return "—";
+  return (value >= 0 ? "+" : "") + (value * 100).toFixed(digits) + "%";
+}
+function fmtTime(ts, timeframe) {
+  const d = new Date(ts * 1000);
+  const pad = (n) => String(n).padStart(2, "0");
+  const date = `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
+  if (timeframe === "1d" || timeframe === "1w" || timeframe === "1mon") return date;
+  return `${date} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
+}
+
+/* --------------------------------------------------------------- api fetch */
+async function getJSON(url) {
+  const response = await fetch(url);
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error || response.statusText);
+  return payload;
+}
+
+async function loadIndex(timeframe) {
+  if (STATIC) return STATIC.index && STATIC.index.timeframe === timeframe ? STATIC.index.rows : [];
+  const data = await getJSON(`/api/index?timeframe=${timeframe}`);
+  return data.rows;
+}
+
+async function loadBars(symbol, timeframe, { bars = PAGE_BARS, end = null } = {}) {
+  if (STATIC) {
+    const payload = STATIC.bars[`${symbol}|${timeframe}`];
+    if (!payload) {
+      throw new Error("static export: only " + Object.keys(STATIC.bars).join(", ") +
+                      " is embedded — run the server to browse the archive");
+    }
+    return payload;
+  }
+  const query = new URLSearchParams({ symbol, timeframe, bars: String(bars) });
+  if (end != null) query.set("end", String(end));
+  return getJSON(`/api/bars?${query}`);
+}
+
+/* ------------------------------------------------------------------- setup */
+function buildTimeframes() {
+  if (STATIC) state.timeframe = STATIC.index.timeframe;
+  el("tfs").innerHTML = "";
+  TF.forEach((tf) => {
+    const button = document.createElement("button");
+    button.textContent = tf;
+    button.className = tf === state.timeframe ? "on" : "";
+    if (STATIC && tf !== state.timeframe) button.disabled = true;
+    button.onclick = () => switchTimeframe(tf);
+    el("tfs").append(button);
+  });
+  el("src").textContent = STATIC ? "(static export)" : "";
+}
+
+function buildRanges() {
+  el("ranges").innerHTML = "";
+  RANGES.forEach(([label]) => {
+    const button = document.createElement("button");
+    button.textContent = label;
+    button.dataset.range = label;
+    button.onclick = () => applyRange(label);
+    el("ranges").append(button);
+  });
+}
+
+function renderList() {
+  const query = el("search").value.trim().toUpperCase();
+  const rows = state.index.filter((row) => !query || row.symbol.includes(query)).slice(0, 400);
+  el("list").innerHTML = "";
+  rows.forEach((row) => {
+    const div = document.createElement("div");
+    div.className = "row" + (row.symbol === state.symbol ? " on" : "");
+    // The quote comes from the symbol: the archive holds cross pairs like `TEL-BTC`, which
+    // this page used to label "TEL-BTC /USDT".
+    const [base, quote] = row.symbol.indexOf("-") < 0
+      ? [row.symbol, ""] : [row.symbol.slice(0, row.symbol.indexOf("-")), row.symbol.slice(row.symbol.indexOf("-") + 1)];
+    div.innerHTML =
+      `<span class="sym">${base}<span class="sub"> /${quote}</span></span>` +
+      `<span class="px">${fmtPrice(row.last)}</span>` +
+      `<span class="sub">vol ${fmtCompact(row.turnover)}</span>` +
+      `<span class="chg ${row.change >= 0 ? "up" : "down"}">${fmtPercent(row.change)}</span>`;
+    div.onclick = () => selectSymbol(row.symbol);
+    el("list").append(div);
+  });
+  el("status").textContent =
+    `${state.index.length} symbols with a ${state.timeframe} series` +
+    (rows.length < state.index.length ? `, showing ${rows.length}` : "");
+}
+
+async function switchTimeframe(timeframe) {
+  if (STATIC && timeframe !== state.timeframe) return;
+  state.timeframe = timeframe;
+  document.querySelectorAll("#tfs button").forEach((b) => b.classList.toggle("on", b.textContent === timeframe));
+  updateHash();
+  try {
+    state.index = await loadIndex(timeframe);
+  } catch (error) {
+    state.index = [];
+    el("notice").style.display = "block";
+    el("notice").textContent = error.message;
+  }
+  renderList();
+  const first = (state.index[0] && state.index[0].symbol) || null;
+  await selectSymbol(state.symbol && state.index.some((r) => r.symbol === state.symbol) ? state.symbol : first);
+}
+
+async function selectSymbol(symbol) {
+  if (!symbol || state.loading) return;
+  if (STATIC && !STATIC.bars[`${symbol}|${state.timeframe}`]) {
+    el("notice").style.display = "block";
+    el("notice").textContent =
+      "static export: this file embeds one series. Run `uv run kcs-dashboard` for the whole archive.";
+    return;
+  }
+  state.loading = true;
+  state.symbol = symbol;
+  el("notice").style.display = "none";
+  updateHash();
+  renderList();
+  try {
+    state.series = await loadBars(symbol, state.timeframe, { bars: PAGE_BARS });
+    state.view = null;               // show the newest bars
+    state.priceView = null;          // and fit the price scale to them
+    state.hover = null;
+    document.querySelectorAll("#ranges button").forEach((b) => b.classList.remove("on"));
+    el("title").textContent = `${symbol} · ${state.timeframe}`;
+    updateQuote();
+    draw();
+    el("status").textContent =
+      `${state.series.series_bars.toLocaleString()} bars in the series, ` +
+      `${state.series.count.toLocaleString()} loaded` +
+      (state.series.more ? ` (${fmtTime(state.series.first, state.timeframe)} …)` : "") +
+      " · wheel or drag the axes to zoom, drag the plot to pan";
+  } catch (error) {
+    el("notice").style.display = "block";
+    el("notice").textContent = error.message;
+  } finally {
+    state.loading = false;
+  }
+}
+
+function updateQuote() {
+  if (!state.series) return;
+  const { c, t, timeframe } = state.series;
+  const last = c[c.length - 1];
+  const lookback = { "1h": 24, "4h": 6, "1d": 30, "1w": 4, "1mon": 1 }[timeframe] || 30;
+  const change = c.length > lookback ? last / c[c.length - 1 - lookback] - 1 : null;
+  el("quote").innerHTML =
+    `${fmtPrice(last)} <span class="${change >= 0 ? "up" : "down"}">${fmtPercent(change)}</span> ` +
+    `<span class="sub">last bar ${fmtTime(t[t.length - 1], timeframe)} UTC</span>`;
+}
+
+/* ------------------------------------------------------------------ ranges */
+function applyRange(label) {
+  document.querySelectorAll("#ranges button").forEach((b) => b.classList.toggle("on", b.textContent === label));
+  const seconds = (RANGES.find(([name]) => name === label) || [])[1];
+  if (!state.series) return;
+  if (seconds == null) {
+    loadAll();                           // one request for the whole series
+  } else {
+    const cutoff = state.series.t[state.series.count - 1] - seconds;
+    let from = 0;
+    while (from < state.series.count && state.series.t[from] < cutoff) from++;
+    state.view = { from: Math.max(0, from), to: state.series.count - 1 };
+  }
+  draw();
+}
+
+// The server serves up to 200k bars in one reply, so "All" is a single round trip
+// instead of sixteen of them; the page downsamples to buckets when it draws.
+async function loadAll() {
+  if (!state.series || STATIC || state.loading) return;
+  if (!state.series.more) { state.view = { from: 0, to: state.series.count - 1 }; draw(); return; }
+  state.loading = true;
+  el("status").textContent = "loading the whole series…";
+  try {
+    const full = await loadBars(state.symbol, state.timeframe, { bars: 200000 });
+    state.series = full;
+    state.view = { from: 0, to: Math.max(0, full.count - 1) };
+    el("status").textContent = `${full.count.toLocaleString()} bars loaded`;
+    draw();
+  } catch (error) {
+    el("status").textContent = error.message;
+  } finally {
+    state.loading = false;
+  }
+}
+
+async function extendHistory(all = false) {
+  if (!state.series || !state.series.more || state.loading || STATIC) return;
+  state.loading = true;
+  let pages = 0;
+  el("status").textContent = "loading older bars…";
+  try {
+    const older = await loadBars(state.symbol, state.timeframe, { bars: PAGE_BARS, end: state.series.first - 1 });
+    const added = older.count;
+    ["t", "o", "h", "l", "c", "v"].forEach((key) => {
+      state.series[key] = older[key].concat(state.series[key]);
+    });
+    state.series.count += added;
+    state.series.first = older.first;
+    state.series.more = older.more;
+    if (state.view) { state.view.from += added; state.view.to += added; }
+    el("status").textContent = `${state.series.count.toLocaleString()} bars loaded`;
+    draw();
+  } catch (error) {
+    el("status").textContent = error.message;
+  } finally {
+    state.loading = false;
+  }
+  // `--last`-style "All" walks backwards until the series runs out, a page at a
+  // time, so the chart stays responsive while the history fills in behind it.
+  if (all && state.series.more && pages < 40 && !STATIC) {
+    pages++;
+    await extendHistory(true);
+  }
+}
+
+/* ------------------------------------------------------------- indicators */
+const smaCache = new Map();
+function sma(period) {
+  if (!state.series) return null;
+  const key = `${state.symbol}|${state.timeframe}|${period}|${state.series.count}`;
+  if (smaCache.has(key)) return smaCache.get(key);
+  const closes = state.series.c;
+  const out = new Array(closes.length).fill(null);
+  let sum = 0;
+  for (let i = 0; i < closes.length; i++) {
+    sum += closes[i];
+    if (i >= period) sum -= closes[i - period];
+    if (i >= period - 1) out[i] = sum / period;
+  }
+  smaCache.set(key, out);
+  return out;
+}
+
+/* ---------------------------------------------------------------- drawing */
+let geometry = null;
+//: The `auto` button, found once at boot: `draw()` runs on every mouse move, and a DOM
+//: query per frame is both wasteful and a source of "it worked in the browser but not
+//: under the headless check" surprises.
+let autoLabel = null;
+
+// How much history the chart opens on. A fixed bar count (the first version used
+// 260) means the window depends on the timeframe rather than on the screen, and on a
+// wide display it left most of the loaded history off to the left: the chart looked
+// parked at the right edge and had to be zoomed out by hand. Roughly 1.4 px per bar
+// fills the plot with readable candles and shows three times as much at once.
+function defaultWindow() {
+  const width = Math.max(240, chart.clientWidth - 76);
+  return Math.max(250, Math.min(1500, Math.round(width / 1.4)));
+}
+
+// The window on screen, in one place. Every handler that pans or zooms starts here: the
+// first version rebuilt a hardcoded 260-bar window inside the wheel handler, so the very
+// first tick threw away whatever the chart was showing (measured: 803 bars -> 222, which
+// reads as the chart sliding sideways as you scroll).
+function currentView() {
+  if (state.view) return state.view;
+  const count = state.series ? state.series.count : 0;
+  if (!count) return { from: 0, to: 0 };
+  return { from: Math.max(0, count - defaultWindow()), to: count - 1 };
+}
+
+function visible() {
+  const count = state.series.count;
+  const view = currentView();
+  return { from: Math.max(0, Math.floor(view.from)), to: Math.min(count - 1, Math.ceil(view.to)) };
+}
+
+// Keep the range buttons honest about what is on screen, including after a manual
+// zoom or pan, instead of only when one of them was clicked.
+function syncPresetButtons() {
+  const active = activePreset();
+  document.querySelectorAll("#ranges button").forEach((button) => {
+    button.classList.toggle("on", button.dataset.range === active);
+  });
+}
+
+function activePreset() {
+  if (!state.series || state.series.count === 0) return null;
+  const { from, to } = visible();
+  if (from <= 0 && to >= state.series.count - 1) return "All";
+  const span = state.series.t[to] - state.series.t[from];
+  for (const [label, seconds] of RANGES) {
+    if (seconds == null) continue;
+    if (Math.abs(span - seconds) / seconds < 0.25) return label;
+  }
+  return null;
+}
+
+function logTicks(min, max) {
+  const out = [];
+  if (!(min > 0) || !(max > min)) return [min];
+  for (let value = min; value <= max && out.length < 40; value *= 2) out.push(value);
+  return out.length ? out : [min, max];
+}
+
+function niceTicks(min, max, count) {
+  const span = max - min;
+  if (!(span > 0)) return [min];
+  const raw = span / count;
+  const magnitude = Math.pow(10, Math.floor(Math.log10(raw)));
+  const step = [1, 2, 2.5, 5, 10].map((m) => m * magnitude).find((s) => s >= raw) || magnitude * 10;
+  const ticks = [];
+  for (let value = Math.ceil(min / step) * step; value <= max * 1.0001; value += step) ticks.push(value);
+  return ticks;
+}
+
+// Which of the four views to draw. `auto` keeps the old behaviour — candlesticks while
+// there is room for them, a close line when the bars would be thinner than a pixel —
+// and the other three override it, because a squeezed candlestick chart is still what
+// somebody may want to look at.
+function resolveStyle(slot) {
+  if (state.style !== "auto") return state.style;
+  return slot >= 3 ? "candles" : "line";
+}
+
+function setStyle(style) {
+  if (!STYLES.includes(style)) return;
+  state.style = style;
+  document.querySelectorAll("#styles button").forEach((button) => {
+    button.classList.toggle("on", button.dataset.style === style);
+  });
+  updateHash();
+  draw();
+}
+
+function draw() {
+  const width = chart.clientWidth;
+  const height = chart.clientHeight;
+  const dpr = window.devicePixelRatio || 1;
+  if (chart.width !== Math.round(width * dpr) || chart.height !== Math.round(height * dpr)) {
+    chart.width = Math.round(width * dpr);
+    chart.height = Math.round(height * dpr);
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+  ctx.font = "11px ui-monospace, Menlo, Consolas, monospace";
+
+  const bottom = 20, volumeHeight = Math.max(50, height * 0.2);
+  const priceTop = 10, priceBottom = height - bottom - volumeHeight - 8;
+  const plotLeft = 8;
+  // Bucketing only needs an approximate plot width; the real one comes after the labels,
+  // because the right-hand scale has to be as wide as the widest thing it prints.
+  const approximateWidth = width - 68;
+  geometry = { plotLeft, plotRight: width - 68, priceTop, priceBottom, volumeTop: priceBottom + 8,
+               volumeBottom: height - bottom, width, height, points: [] };
+
+  if (!state.series || state.series.count === 0) {
+    ctx.fillStyle = "#7c8798";
+    ctx.fillText("choose a symbol", 16, 24);
+    return;
+  }
+
+  const { from, to } = visible();
+  const bars = state.series;
+  const slice = { from, to, count: to - from + 1 };
+  if (slice.count <= 0) return;
+
+  // Downsample when the window is wider than the pixels: one candle per bucket.
+  const maxBuckets = Math.max(1, Math.floor(approximateWidth - plotLeft));
+  const bucket = Math.max(1, Math.ceil(slice.count / maxBuckets));
+  const points = [];
+  for (let i = from; i <= to; i += bucket) {
+    const stop = Math.min(to + 1, i + bucket);
+    let high = -Infinity, low = Infinity, volume = 0;
+    for (let k = i; k < stop; k++) {
+      high = Math.max(high, bars.h[k]);
+      low = Math.min(low, bars.l[k]);
+      volume += bars.v[k] || 0;
+    }
+    points.push({
+      index: i, last: stop - 1, t: bars.t[stop - 1], o: bars.o[i], c: bars.c[stop - 1],
+      h: high, l: low, v: volume,
+    });
+  }
+
+  let min = Infinity, max = -Infinity, maxVolume = 0;
+  points.forEach((p) => {
+    min = Math.min(min, p.l); max = Math.max(max, p.h);
+    maxVolume = Math.max(maxVolume, p.v);
+  });
+  if (state.sma.size) {
+    state.sma.forEach((period) => {
+      const values = sma(period);
+      if (!values) return;
+      for (let i = from; i <= to; i++) {
+        const value = values[i];
+        if (value == null) continue;
+        min = Math.min(min, value); max = Math.max(max, value);
+      }
+    });
+  }
+  const padding = (max - min) * 0.06 || Math.abs(max) * 0.02 || 1e-12;
+  min -= padding; max += padding;
+  if (min < 0 && max > 0) min = 0;          // a spot price is never negative
+  if (state.log) { min = Math.max(min, max / 1000); }
+  // A dragged price scale overrides the fit to the data until it is reset.
+  if (state.priceView) { min = state.priceView.min; max = state.priceView.max; }
+
+  // The price scale is as wide as the widest label it will print, so a five-digit price
+  // or an exponential one cannot run off the edge of the canvas.
+  const axisTicks = state.log ? logTicks(min, max) : niceTicks(min, max, 6);
+  const widest = Math.max(
+    0,
+    ...axisTicks.map((value) => ctx.measureText(fmtPrice(value)).width),
+    ctx.measureText(fmtCompact(maxVolume)).width,
+    ctx.measureText(fmtPrice(min)).width,
+    ctx.measureText(fmtPrice(max)).width,
+  );
+  const right = Math.max(56, Math.min(190, Math.ceil(widest) + 16));
+  const plotRight = width - right;
+  geometry = { plotLeft, plotRight, priceTop, priceBottom, volumeTop: priceBottom + 8,
+               volumeBottom: height - bottom, width, height, points: [], min, max };
+
+  const y = (price) => {
+    if (state.log) {
+      const lo = Math.log(min), hi = Math.log(max);
+      return priceBottom - ((Math.log(Math.max(price, min)) - lo) / (hi - lo)) * (priceBottom - priceTop);
+    }
+    return priceBottom - ((price - min) / (max - min)) * (priceBottom - priceTop);
+  };
+  const x = (i) => plotLeft + ((i - from + 0.5) / slice.count) * (plotRight - plotLeft);
+  const xPoint = (k) => plotLeft + ((k - from + 0.5) / points.length) * (plotRight - plotLeft);
+
+  // grid + price axis
+  ctx.strokeStyle = "#1c2230";
+  ctx.fillStyle = "#7c8798";
+  ctx.lineWidth = 1;
+  const ticks = axisTicks;
+  ticks.forEach((value) => {
+    const py = Math.round(y(value)) + 0.5;
+    if (py < priceTop || py > priceBottom) return;
+    ctx.beginPath(); ctx.moveTo(plotLeft, py); ctx.lineTo(plotRight, py); ctx.stroke();
+    ctx.fillText(fmtPrice(value), plotRight + 6, py + 3);
+  });
+  // time axis
+  const labelStep = Math.max(1, Math.ceil(points.length / 7));
+  for (let k = 0; k < points.length; k += labelStep) {
+    ctx.fillText(fmtTime(points[k].t, state.timeframe), xPoint(k) - 24, geometry.volumeBottom + 14);
+  }
+  // volume axis
+  ctx.strokeStyle = "#1c2230";
+  ctx.beginPath(); ctx.moveTo(plotLeft, geometry.volumeTop + 0.5); ctx.lineTo(plotRight, geometry.volumeTop + 0.5); ctx.stroke();
+  ctx.fillStyle = "#7c8798";
+  ctx.fillText(fmtCompact(maxVolume), plotRight + 6, geometry.volumeTop + 10);
+
+  // the chosen view: candlesticks, OHLC bars, or a close line
+  const slot = (plotRight - plotLeft) / points.length;
+  const candleWidth = Math.max(1, Math.min(14, slot * 0.7));
+  const style = resolveStyle(slot);
+  // Say out loud what `auto` picked: at the wide default window the bars are thinner
+  // than a pixel, so it draws a line, and that is worth seeing in the toolbar rather
+  // than wondering where the candles went.
+  if (autoLabel) autoLabel.textContent = state.style === "auto" ? `auto (${style})` : "auto";
+  if (style === "candles" || style === "bars") {
+    points.forEach((p, k) => {
+      const cx = Math.round(xPoint(k)) + 0.5, up = p.c >= p.o;
+      const color = up ? "#26a69a" : "#ef5350";
+      ctx.strokeStyle = color;
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.moveTo(cx, y(p.h));
+      ctx.lineTo(cx, y(p.l));
+      ctx.stroke();
+      if (style === "candles") {
+        const top = y(Math.max(p.o, p.c)), height2 = Math.max(1, Math.abs(y(p.o) - y(p.c)));
+        ctx.fillRect(cx - candleWidth / 2, top, candleWidth, height2);
+      } else {
+        // An OHLC bar: the wick above, a tick left for the open and right for the close.
+        const tick = Math.max(1, Math.min(candleWidth, slot * 0.35));
+        ctx.beginPath();
+        ctx.moveTo(cx - tick, y(p.o));
+        ctx.lineTo(cx, y(p.o));
+        ctx.moveTo(cx, y(p.c));
+        ctx.lineTo(cx + tick, y(p.c));
+        ctx.stroke();
+      }
+    });
+  } else {
+    ctx.strokeStyle = "#4c8dff";
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    points.forEach((p, k) => (k ? ctx.lineTo(xPoint(k), y(p.c)) : ctx.moveTo(xPoint(k), y(p.c))));
+    ctx.stroke();
+    ctx.lineWidth = 1;
+  }
+
+  // volume
+  const volumeScale = geometry.volumeBottom - geometry.volumeTop;
+  points.forEach((p, k) => {
+    const barHeight = maxVolume > 0 ? (p.v / maxVolume) * volumeScale : 0;
+    ctx.fillStyle = p.c >= p.o ? "rgba(38,166,154,.45)" : "rgba(239,83,80,.45)";
+    const cx = xPoint(k);
+    ctx.fillRect(cx - candleWidth / 2, geometry.volumeBottom - barHeight, candleWidth, barHeight);
+  });
+
+  // moving averages
+  const smaColors = { 20: "#f5c542", 50: "#4c8dff", 200: "#c084fc" };
+  state.sma.forEach((period) => {
+    const values = sma(period);
+    if (!values) return;
+    ctx.strokeStyle = smaColors[period] || "#fff";
+    ctx.lineWidth = 1.3;
+    ctx.beginPath();
+    let started = false;
+    for (let i = from; i <= to; i++) {
+      const value = values[i];
+      if (value == null) continue;
+      const px = x(i), py = y(value);
+      started ? ctx.lineTo(px, py) : (ctx.moveTo(px, py), (started = true));
+    }
+    ctx.stroke();
+    ctx.lineWidth = 1;
+  });
+
+  // crosshair + readout
+  if (state.hover != null && state.hover >= from && state.hover <= to) {
+    const k = state.hover - from;
+    const px = x(state.hover);
+    const bar = { o: bars.o[state.hover], h: bars.h[state.hover], l: bars.l[state.hover],
+                  c: bars.c[state.hover], v: bars.v[state.hover], t: bars.t[state.hover] };
+    ctx.save();
+    ctx.setLineDash([3, 3]);
+    ctx.strokeStyle = "#5b6577";
+    ctx.beginPath(); ctx.moveTo(Math.round(px) + 0.5, priceTop); ctx.lineTo(Math.round(px) + 0.5, geometry.volumeBottom); ctx.stroke();
+    if (state.mouseY != null) {
+      ctx.beginPath(); ctx.moveTo(plotLeft, Math.round(state.mouseY) + 0.5); ctx.lineTo(plotRight, Math.round(state.mouseY) + 0.5); ctx.stroke();
+    }
+    ctx.restore();
+    if (state.mouseY != null && state.mouseY >= priceTop && state.mouseY <= priceBottom) {
+      const price = state.log
+        ? Math.exp(Math.log(min) + ((priceBottom - state.mouseY) / (priceBottom - priceTop)) * (Math.log(max) - Math.log(min)))
+        : min + ((priceBottom - state.mouseY) / (priceBottom - priceTop)) * (max - min);
+      ctx.fillStyle = "#1b2130";
+      ctx.fillRect(plotRight + 2, state.mouseY - 8, right - 4, 16);
+      ctx.fillStyle = "#d7dde7";
+      ctx.fillText(fmtPrice(price), plotRight + 6, state.mouseY + 4);
+    }
+    const change = state.hover > 0 ? bar.c / bars.c[state.hover - 1] - 1 : null;
+    const lines = [
+      fmtTime(bar.t, state.timeframe) + " UTC",
+      `O ${fmtPrice(bar.o)}   H ${fmtPrice(bar.h)}`,
+      `L ${fmtPrice(bar.l)}   C ${fmtPrice(bar.c)}`,
+      `chg ${fmtPercent(change)}   vol ${fmtCompact(bar.v)}`,
+    ];
+    const boxWidth = 208, boxHeight = lines.length * 14 + 8;
+    let boxX = px + 12;
+    if (boxX + boxWidth > plotRight) boxX = px - boxWidth - 12;
+    ctx.fillStyle = "rgba(20,25,34,.94)";
+    ctx.strokeStyle = "#232a36";
+    ctx.fillRect(boxX, priceTop + 6, boxWidth, boxHeight);
+    ctx.strokeRect(boxX + 0.5, priceTop + 6.5, boxWidth, boxHeight);
+    ctx.fillStyle = "#d7dde7";
+    lines.forEach((line, i) => ctx.fillText(line, boxX + 8, priceTop + 24 + i * 14));
+  }
+  geometry.points = points;
+  syncPresetButtons();
+}
+
+/* ----------------------------------------------------------- interaction */
+function nearestBar(clientX) {
+  if (!geometry || !geometry.points || !geometry.points.length || !state.series) return null;
+  const { plotLeft, plotRight, points } = geometry;
+  if (clientX < plotLeft || clientX > plotRight) return null;
+  const ratio = (clientX - plotLeft) / (plotRight - plotLeft);
+  const k = Math.min(points.length - 1, Math.max(0, Math.floor(ratio * points.length)));
+  return points[k].index;
+}
+
+chart.addEventListener("mousemove", (event) => {
+  const rect = chart.getBoundingClientRect();
+  const localX = event.clientX - rect.left, localY = event.clientY - rect.top;
+
+  if (state.dragAxis) {
+    // Dragging the axis down widens the price range, up narrows it.
+    scalePrice(state.dragAxis.anchor, Math.exp((event.clientY - state.dragAxis.y) * 0.005));
+    draw();
+    return;
+  }
+
+  if (state.dragTime) {
+    const view = currentView();
+    const span = Math.max(1, view.to - view.from);
+    const nextSpan = Math.max(12, Math.min(state.series.count - 1, span * Math.exp((event.clientX - state.dragTime.x) * 0.005)));
+    const anchor = state.dragTime.anchor;
+    const ratio = (anchor - view.from) / span;
+    let from = anchor - nextSpan * ratio;
+    let to = from + nextSpan;
+    if (from < 0) { to -= from; from = 0; }
+    if (to > state.series.count - 1) { from -= to - (state.series.count - 1); to = state.series.count - 1; }
+    state.view = { from: Math.max(0, from), to };
+    draw();
+    return;
+  }
+
+  if (state.drag) {
+    const dx = event.clientX - state.drag.x;
+    const view = currentView();
+    const perBar = (view.to - view.from) / (geometry.plotRight - geometry.plotLeft);
+    const shift = Math.round(-dx * perBar);
+    if (shift !== 0) {
+      const next = shiftView(shift);
+      state.drag.x = event.clientX;
+      if (next === "left-edge") extendHistory();
+      draw();
+    }
+    return;
+  }
+  state.hover = nearestBar(localX);
+  state.mouseY = localY >= geometry.priceTop && localY <= geometry.priceBottom ? localY : null;
+  // Say what the pointer is over: the two axes are controls, the plot is not.
+  chart.style.cursor = onPriceAxis(localX, localY) ? "ns-resize"
+    : onTimeAxis(localX, localY) ? "ew-resize" : "crosshair";
+  draw();
+});
+
+chart.addEventListener("mouseleave", () => { state.hover = null; state.mouseY = null; draw(); });
+chart.addEventListener("mousedown", (event) => {
+  const rect = chart.getBoundingClientRect();
+  const localX = event.clientX - rect.left, localY = event.clientY - rect.top;
+  if (onPriceAxis(localX, localY)) {
+    state.dragAxis = { y: event.clientY, anchor: priceAtPixel(localY) };
+    chart.style.cursor = "ns-resize";
+    return;
+  }
+  if (onTimeAxis(localX, localY)) {
+    const anchor = nearestBar(localX);
+    const view = currentView();
+    state.dragTime = { x: event.clientX, anchor: anchor == null ? (view.from + view.to) / 2 : anchor };
+    chart.style.cursor = "ew-resize";
+    return;
+  }
+  state.drag = { x: event.clientX };
+  chart.style.cursor = "grabbing";
+});
+window.addEventListener("mouseup", () => {
+  state.drag = null;
+  state.dragAxis = null;
+  state.dragTime = null;
+  chart.style.cursor = "crosshair";
+});
+
+chart.addEventListener("wheel", (event) => {
+  event.preventDefault();
+  if (!state.series || state.loading) return;
+
+  // Over the right-hand scale, the wheel is a vertical zoom: the price under the cursor
+  // stays under the cursor, and the time range does not move at all.
+  const wheelRect = chart.getBoundingClientRect();
+  const wheelX = event.clientX - wheelRect.left, wheelY = event.clientY - wheelRect.top;
+  if (onPriceAxis(wheelX, wheelY)) {
+    scalePrice(priceAtPixel(wheelY), event.deltaY > 0 ? 1.15 : 1 / 1.15);
+    draw();
+    return;
+  }
+
+  const view = currentView();
+  const span = Math.max(1, view.to - view.from);
+
+  // A trackpad's two-finger swipe arrives as a mostly horizontal wheel, and shift+wheel
+  // is the usual pan gesture: treat both as panning, so the same movement does the
+  // obvious thing instead of zooming under the user's hand.
+  if (Math.abs(event.deltaX) > Math.abs(event.deltaY) || event.shiftKey) {
+    const step = Math.max(1, Math.round(span * 0.1));
+    const direction = event.shiftKey ? (event.deltaY > 0 ? 1 : -1) : (event.deltaX > 0 ? 1 : -1);
+    shiftView(step * direction);
+    draw();
+    return;
+  }
+
+  const rect = chart.getBoundingClientRect();
+  const anchor = nearestBar(event.clientX - rect.left);
+  const factor = event.deltaY > 0 ? 1.15 : 1 / 1.15;
+  const nextSpan = Math.max(12, Math.min(state.series.count - 1, span * factor));
+  // Zoom around the cursor; with the pointer outside the plot, around the middle.
+  const ratio = anchor == null ? 0.5 : (anchor - view.from) / span;
+  let from = anchor == null ? view.from + (span - nextSpan) / 2 : anchor - nextSpan * ratio;
+  let to = from + nextSpan;
+  if (from < 0) { to -= from; from = 0; }
+  if (to > state.series.count - 1) { from -= to - (state.series.count - 1); to = state.series.count - 1; }
+  state.view = { from: Math.max(0, from), to };
+  draw();
+}, { passive: false });
+
+chart.addEventListener("dblclick", (event) => {
+  const rect = chart.getBoundingClientRect();
+  const localX = event.clientX - rect.left, localY = event.clientY - rect.top;
+  if (onPriceAxis(localX, localY)) { state.priceView = null; draw(); return; }
+  if (onTimeAxis(localX, localY)) { state.view = null; draw(); return; }
+  state.view = null;
+  state.priceView = null;
+  draw();
+});
+window.addEventListener("resize", draw);
+
+// --- the price scale as a control ------------------------------------------
+// The right-hand axis is the vertical navigator: dragging it (or wheeling over it)
+// stretches the price range without touching the time range, which is how every charting
+// package behaves and what "I cannot zoom out with the right navigator" was about.
+function priceAtPixel(localY) {
+  const { priceTop, priceBottom, min, max } = geometry;
+  const ratio = (priceBottom - localY) / Math.max(1, priceBottom - priceTop);
+  if (state.log) return Math.exp(Math.log(min) + ratio * (Math.log(max) - Math.log(min)));
+  return min + ratio * (max - min);
+}
+
+//: Scale the price range about `anchor` (a price that stays where it is on screen).
+function scalePrice(anchor, factor) {
+  const base = state.priceView || { min: geometry.min, max: geometry.max };
+  const clamped = Math.max(0.02, Math.min(50, factor));
+  if (state.log) {
+    const at = Math.log(Math.max(anchor, base.min / 1e6));
+    state.priceView = {
+      min: Math.exp(at + (Math.log(base.min) - at) * clamped),
+      max: Math.exp(at + (Math.log(base.max) - at) * clamped),
+    };
+  } else {
+    state.priceView = {
+      min: anchor + (base.min - anchor) * clamped,
+      max: anchor + (base.max - anchor) * clamped,
+    };
+  }
+}
+
+function onPriceAxis(localX, localY) {
+  return Boolean(geometry) && localX > geometry.plotRight && localY <= geometry.volumeBottom;
+}
+
+function onTimeAxis(localX, localY) {
+  return Boolean(geometry) && localY > geometry.volumeBottom;
+}
+
+function shiftView(shift) {
+  const view = currentView();
+  let from = view.from + shift, to = view.to + shift;
+  let edge = null;
+  if (from < 0) { to -= from; from = 0; edge = "left-edge"; }
+  if (to > state.series.count - 1) { from -= to - (state.series.count - 1); to = state.series.count - 1; }
+  state.view = { from: Math.max(0, from), to };
+  return edge;
+}
+
+window.addEventListener("keydown", (event) => {
+  if (event.target.tagName === "INPUT") return;
+  const view = currentView();
+  const span = view.to - view.from;
+  if (event.key === "ArrowLeft") { shiftView(-Math.round(span * 0.2)); draw(); }
+  if (event.key === "ArrowRight") { shiftView(Math.round(span * 0.2)); draw(); }
+  if (event.key === "+" || event.key === "=") { chart.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 })); }
+  if (event.key === "-") { chart.dispatchEvent(new WheelEvent("wheel", { deltaY: 120 })); }
+  if (event.key === "s" || event.key === "S") {
+    setStyle(STYLES[(STYLES.indexOf(state.style) + 1) % STYLES.length]);
+  }
+});
+
+/* ------------------------------------------------------------------ tools */
+document.querySelectorAll("#tools button[data-sma]").forEach((button) => {
+  button.onclick = () => {
+    const period = Number(button.dataset.sma);
+    state.sma.has(period) ? state.sma.delete(period) : state.sma.add(period);
+    button.classList.toggle("on", state.sma.has(period));
+    draw();
+  };
+});
+el("log").onclick = () => { state.log = !state.log; el("log").classList.toggle("on", state.log); draw(); };
+document.querySelectorAll("#styles button").forEach((button) => {
+  button.onclick = () => setStyle(button.dataset.style);
+});
+el("reset").onclick = () => { state.view = null; state.priceView = null; state.sma.clear();
+  document.querySelectorAll("#tools button[data-sma]").forEach((b) => b.classList.remove("on")); draw(); };
+el("search").oninput = renderList;
+el("search").addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    const first = state.index.find((row) => !el("search").value ||
+      row.symbol.includes(el("search").value.trim().toUpperCase()));
+    if (first) selectSymbol(first.symbol);
+  }
+});
+
+/* -------------------------------------------------------------- url state */
+function updateHash() {
+  const parts = [];
+  if (state.symbol) parts.push(`symbol=${state.symbol}`);
+  parts.push(`timeframe=${state.timeframe}`);
+  if (state.style !== "candles") parts.push(`style=${state.style}`);
+  history.replaceState(null, "", "#" + parts.join("&"));
+}
+function readHash() {
+  const params = new URLSearchParams(location.hash.replace(/^#/, ""));
+  return {
+    symbol: params.get("symbol"),
+    timeframe: params.get("timeframe"),
+    style: params.get("style"),
+  };
+}
+
+/* ------------------------------------------------------------------- boot */
+(async function boot() {
+  const initial = readHash();
+  if (initial.timeframe && TF.includes(initial.timeframe)) state.timeframe = initial.timeframe;
+  if (initial.style && STYLES.includes(initial.style)) state.style = initial.style;
+  document.querySelectorAll("#styles button").forEach((button) => {
+    button.classList.toggle("on", button.dataset.style === state.style);
+    if (button.dataset.style === "auto") autoLabel = button;
+  });
+  buildTimeframes();
+  buildRanges();
+  try {
+    state.index = await loadIndex(state.timeframe);
+  } catch (error) {
+    el("notice").style.display = "block";
+    el("notice").textContent = error.message;
+  }
+  renderList();
+  // A static export embeds exactly one series, and the sidebar's first row is the
+  // archive's busiest pair, which is usually a different symbol: open the embedded one.
+  const embedded = STATIC ? Object.keys(STATIC.bars)[0].split("|")[0] : null;
+  const wanted = initial.symbol && state.index.some((row) => row.symbol === initial.symbol)
+    ? initial.symbol
+    : (embedded || (state.index[0] && state.index[0].symbol));
+  if (wanted) await selectSymbol(wanted);
+  draw();
+})();
+</script>
+</body>
+</html>

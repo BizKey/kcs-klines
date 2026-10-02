@@ -758,3 +758,44 @@ def test_the_rule_actually_flattens_a_leg_that_goes_quiet(tmp_path: Path, capsys
         return float(line.split(":")[1].split("%")[0].strip().lstrip("+")) / 100.0
 
     assert exposure(with_rule) < exposure(without)
+
+
+def test_the_universe_can_exclude_tokenised_equities(tmp_path: Path, capsys):
+    """A stock token trades like a pair and has no business in a crypto universe.
+
+    The exchange lists them beside spot pairs and the turnover ranking cannot tell
+    the difference, so the flag has to, and the report has to say which it saw.
+    """
+    root = tmp_path / "spot"
+    bars = make_bars(wavy(400))
+    for symbol in ("BTC-USDT", "ETH-USDT", "AAPLX-USDT"):
+        write_archive(root, symbol, "1d", bars)
+
+    def run(*extra):
+        code = basket.main([
+            "--data-dir", str(root), "--timeframe", "1d",
+            "--symbols", "BTC-USDT,ETH-USDT,AAPLX-USDT", "--strategy", "sma",
+            "--param", "window=20", "--no-artifacts", *extra,
+        ])
+        return code, capsys.readouterr().out
+
+    code, kept_output = run()
+    assert code == 0
+    assert "AAPLX-USDT" in kept_output
+    assert "--exclude-equities" in kept_output, "the report must say how to drop them"
+
+    code, dropped_output = run("--exclude-equities")
+    assert code == 0
+    assert "1 tokenised equity dropped: AAPLX-USDT" in dropped_output
+    assert "leg_AAPLX-USDT" not in dropped_output
+
+
+def test_excluding_every_leg_is_an_error_not_an_empty_basket(tmp_path: Path, capsys):
+    root = tmp_path / "spot"
+    write_archive(root, "AAPLX-USDT", "1d", make_bars(wavy(400)))
+    with pytest.raises(SystemExit, match="tokenised equity"):
+        basket.main([
+            "--data-dir", str(root), "--timeframe", "1d", "--symbols", "AAPLX-USDT",
+            "--strategy", "sma", "--param", "window=20", "--no-artifacts",
+            "--exclude-equities",
+        ])

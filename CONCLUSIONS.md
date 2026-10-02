@@ -950,6 +950,13 @@ Every coin the session looked at, run through the same harness (`kcs-walkforward
 | SUI | 15 / 2.5 | −60% | +86% (0.40) | **+21%** (0.54, DD −17%) | −22% | +77% (0.38) | −16% |
 | WLD | 14 / 2.3 | −92% | +19% (0.09) | **+21%** (0.48, DD −16%) | — | — | +27% (0.18) |
 | SEI | 14 / 2.3 | −85% | −24% | **+4%** (0.10, DD −25%) | −38% | −1% | −35% |
+**Re-checked 2026-10-02** with `analysis/experiments/verify_conclusions.py`: the BTC
+`tsmom-blend` cell no longer reproduces. The same harness now returns **+1,234% at Sharpe
+0.93** with `base=7`, and widening the grid lowers it (`base=7,30` → +511%, `base=7,30,60,120`
+→ +143%); the sign of the result is unchanged, the multiple is not. The number above predates
+the timing fixes that forced every portfolio figure to be re-measured, and the rest of this
+table has not been re-run since. Treat the multiples here as unreproduced until
+`verify_conclusions.py` covers them.
 
 **`voltarget-sma` is positive on all nine assets** — the only rule in the table that is:
 with drawdowns of −13…−37% while the assets themselves fell 33-92% over the same stretches
@@ -1447,7 +1454,7 @@ treat any single multiple as noise until a walk-forward agrees with it.
 ## 8. Reproducing the headline numbers
 
 ```bash
-uv run pytest                          # 444 tests, ~25 s
+uv run pytest                          # 510 tests, ~45 s
 
 # one asset
 uv run kcs-backtest --symbol BTC-USDT --strategy tsmom \

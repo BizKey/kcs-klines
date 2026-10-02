@@ -795,6 +795,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--spread-window", type=int, default=500, metavar="BARS",
         help="how many bars of that series to measure over (default: %(default)s)",
     )
+    parser.add_argument(
+        "--exclude-equities",
+        action="store_true",
+        help="drop tokenised equities (AAPLX, TSLAX, ...) from the universe; they trade "
+        "like pairs but follow stocks, and the report names any it kept",
+    )
     parser.add_argument("--fee", type=float, default=0.001, help="commission per side (default: %(default)s)")
     parser.add_argument("--slippage", type=float, default=0.0, help="extra cost per side (default: %(default)s)")
     parser.add_argument("--data-dir", type=Path, default=DATA_DIR, help="root of the parquet archive")
@@ -836,6 +842,14 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("--from must come before --to")
 
     pool = parse_symbols(args.symbols) if args.symbols else None
+    equities: list[str] = []
+    if pool is not None:
+        # A named universe is filtered here; a turnover-selected one below, before
+        # the ranking, so the slot an excluded name would have taken goes to the next
+        # pair rather than disappearing.
+        pool, equities = data.split_equities(pool, args.exclude_equities)
+        if not pool:
+            raise SystemExit("every symbol given was a tokenised equity and --exclude-equities is on")
     if args.select_turnover is not None:
         if args.select_turnover < 1:
             raise SystemExit("--select-turnover needs a positive count")
@@ -849,6 +863,7 @@ def main(argv: list[str] | None = None) -> int:
             pool = universes(args.data_dir, args.timeframe)
         if not pool:
             raise SystemExit(f"no {args.timeframe} series under {args.data_dir} to choose from")
+        pool, equities = data.split_equities(pool, args.exclude_equities)
         reference = since or (
             max(
                 (bars[-1].time for symbol in pool
@@ -947,6 +962,9 @@ def main(argv: list[str] | None = None) -> int:
                   f"{extra*1e4:>16.2f}bp")
     for note in notes:
         print(f"note: {note}")
+    # One line, after the universe is settled: whether the stock tokens are in it.
+    if note := data.equities_note(equities, excluded=args.exclude_equities):
+        print(f"universe: {note}")
 
     liquid: dict[str, dict[int, bool]] = {}
     if args.min_turnover_now > 0:

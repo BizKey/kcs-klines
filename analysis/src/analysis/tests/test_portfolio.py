@@ -983,3 +983,25 @@ def test_a_panel_that_does_not_match_the_dates_is_refused():
         costs=Costs(0), label="rebuilt",
     )
     assert len(result.equity) == len(window)
+
+
+def test_cli_drops_tokenised_equities_when_asked(tmp_path: Path, capsys):
+    root = tmp_path / "spot"
+    closes = [100.0 + (i % 11) for i in range(400)]
+    for symbol in ("AAA-USDT", "BBB-USDT", "AAPLX-USDT"):
+        write_archive(root, symbol, "1d", make_bars(closes, start=START, step=STEP))
+
+    def run(*extra):
+        code = portfolio.main([
+            "--data-dir", str(root), "--calendar", "AAA-USDT", "--timeframe", "1d",
+            "--lookback", "7", "--rebalance", "7", "--select", "sign", *extra,
+        ])
+        return code, capsys.readouterr().out
+
+    code, kept = run()
+    assert code == 0
+    assert "tokenised equit" in kept and "AAPLX-USDT" in kept
+
+    code, dropped = run("--exclude-equities")
+    assert code == 0
+    assert "dropped: AAPLX-USDT" in dropped

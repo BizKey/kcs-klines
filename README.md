@@ -355,6 +355,20 @@ field order, range semantics, weekly grid alignment, and deep history.
 
 ---
 
+## Looking at what was collected
+
+`kcs-dashboard` (installed with the analysis package) serves an interactive candlestick and
+volume view of the archive in the browser — every symbol, sorted by turnover, with zoom, pan,
+crosshair and SMA overlays:
+
+```bash
+uv run kcs-dashboard            # http://127.0.0.1:8765
+```
+
+It reads the Parquet on demand, so it shows new bars as the collector writes them, and one
+chart can be exported as a single self-contained HTML file
+(`uv run kcs-dashboard --export BTC-USDT,1h --out btc.html`).
+
 ## Testing strategies on the collected data
 
 `analysis/` is a uv workspace member — a small Python toolkit that runs trading
