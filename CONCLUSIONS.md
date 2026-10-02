@@ -1454,7 +1454,7 @@ treat any single multiple as noise until a walk-forward agrees with it.
 ## 8. Reproducing the headline numbers
 
 ```bash
-uv run pytest                          # 510 tests, ~45 s
+uv run pytest                          # 512 tests, ~45 s
 
 # one asset
 uv run kcs-backtest --symbol BTC-USDT --strategy tsmom \

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -447,15 +448,20 @@ def test_an_empty_journal_is_not_an_error(archive, tmp_path, capsys):
 def test_cli_rejects_an_unknown_run_id(archive, tmp_path):
     root, bars = archive
     journal_dir = tmp_path / "journal"
-    record(bars, root, journal_dir)
+    first = record(bars, root, journal_dir)
     with pytest.raises(SystemExit, match="no run id starts with"):
         journal.main(["--journal-dir", str(journal_dir), "show", "--id", "nope"])
     with pytest.raises(SystemExit, match="matches 1 runs|no run id starts with"):
         journal.main(["--journal-dir", str(journal_dir), "show", "--id", "zzz"])
 
-    # A prefix that matches several entries is ambiguous and says so.
+    # A prefix that matches several entries is ambiguous and says so. The prefix is the
+    # longest one the two ids share rather than "whatever the clock said": run ids carry a
+    # timestamp to the second, so two records a moment apart can land in different seconds,
+    # and a prefix taken from one of them then matches a single entry. That made this test
+    # fail roughly once every few runs.
     second = record(bars, root, journal_dir, window=9)
-    prefix = second.run_id.split("-")[0]
+    prefix = os.path.commonprefix([first.run_id, second.run_id]).rstrip("-")
+    assert prefix, "two run ids should share at least a first character"
     with pytest.raises(SystemExit, match="matches"):
         journal.main(["--journal-dir", str(journal_dir), "show", "--id", prefix])
 

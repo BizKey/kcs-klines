@@ -199,6 +199,12 @@ uv run kcs-dashboard --port 9000 --open
 uv run kcs-dashboard --export BTC-USDT,1h --out btc.html    # one self-contained file
 ```
 
+The page, the fallback page and the vendored library are re-read whenever their files
+change, so editing them — or pulling a new version — shows up on the next reload with no
+restart. The Parquet is read on demand behind a 60-second cache, so new bars appear the same
+way. `Ctrl-C` stops it; for a permanent instance, `deploy/kcs-klines-backfill.service` is the
+pattern to copy.
+
 * **Sidebar** — every symbol with a series of the chosen timeframe: last price, change and
   median turnover. The percentage column **follows the timeframe**: by default it is one bar
   of whatever is selected (a day on the daily chart, an hour on the hourly one), and the

@@ -43,7 +43,7 @@ place is, and what has already been learned the hard way.
 | `src/` | Rust collector: `kucoin/client.rs`, `storage/parquet_store.rs`, `collector.rs`, `verify.rs`, `status.rs` |
 | `tests/` | Rust tests; `live_api.rs` is `--ignored` and hits the real exchange |
 | `analysis/src/analysis/` | `data.py` `metrics.py` `engine.py` `report.py` `journal.py` `walkforward.py` `portfolio.py` `basket.py` `riskparity.py` `run_backtest.py`, `strategies/`, `tests/` |
-| `analysis/src/analysis/tests/` | 510 pytest tests (engine invariants, registry-wide strategy checks, CLI, journal, walk-forward, portfolio, basket, real-data regression) |
+| `analysis/src/analysis/tests/` | 512 pytest tests (engine invariants, registry-wide strategy checks, CLI, journal, walk-forward, portfolio, basket, real-data regression) |
 | `analysis/out/` | artifacts (CSV/JSON/SVG), gitignored |
 | `analysis/README.md` | the toolkit in detail; `journal/README.md` the journal format |
 | `analysis/src/analysis/dashboard.py` + `dashboard.html` | the local kline dashboard: a stdlib HTTP server over the Parquet, charted with **vendored** TradingView Lightweight Charts (Apache-2.0, `vendor/`); `/canvas` serves the old hand-written renderer |
@@ -54,7 +54,7 @@ place is, and what has already been learned the hard way.
 ```bash
 cargo test && cargo clippy --all-targets      # Rust
 uv sync                                       # Python env (installs the analysis member)
-uv run pytest                                 # 510 tests, ~45 s
+uv run pytest                                 # 512 tests, ~45 s
 uv run kcs-backtest --list                    # 22 registered strategies + their parameters
 uv run kcs-backtest --strategy tsmom --param lookback=720 --param rebalance=168
 uv run kcs-backtest --symbol WLD-USDT --last 1y --strategy volfilter-sma --param window=50 --param max_vol=0.8 --param vol_window=30
