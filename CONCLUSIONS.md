@@ -912,6 +912,18 @@ compounds to +2,485% against +388% for holding, with a Sharpe of 0.73 against 0.
 *honestly chosen* `tsmom-blend` with a short base is the best return of anything measured in
 this repository (+3,096% at Sharpe 1.13) and its drawdown is half of holding's.
 
+**And the correction: it does not transfer to every asset.** On SUI-USDT (15 splits, 2.47
+years, holding it returned **−60.34%** at Sharpe −0.37 and a −87.5% drawdown) the short-lookback
+TSMOM *lost* — the plain one −21.66% at Sharpe −0.16, the blend +77.30% — while the boring
+references did the work: `sma` **+86.33%** (Sharpe 0.40) and `voltarget-sma` **+20.78% with the
+best Sharpe of all, 0.54, and a −17.0% drawdown**. The same pattern shows in SUI's year:
+`tsmom 30/7` −29.21% and `tsmom-blend base14/7` −47.21% against `sma` +9.45% and
+`voltarget-sma` +8.13% (Sharpe 0.41, DD −13.3%) while holding lost 66.65%. So the transferable
+finding is the narrow one — **never run TSMOM with its hourly defaults on daily bars, because
+that is dead code everywhere** — and not "a short lookback wins". On four assets the short
+lookback was the best of the TSMOM family on two (ADA, BTC), the blend was the best on one
+(BTC), and neither was the best strategy on the fourth (SUI).
+
 Three caveats, in order of importance. First, the **candidate set** (lookback 30-360, base
 7-60) was my choice, and a different set would move the result — the honest claim is "much
 shorter than 720 works out of sample", not "30 is the answer". Second, these are wild rides:
