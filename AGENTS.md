@@ -39,7 +39,7 @@ place is, and what has already been learned the hard way.
 | `src/` | Rust collector: `kucoin/client.rs`, `storage/parquet_store.rs`, `collector.rs`, `verify.rs`, `status.rs` |
 | `tests/` | Rust tests; `live_api.rs` is `--ignored` and hits the real exchange |
 | `analysis/src/analysis/` | `data.py` `metrics.py` `engine.py` `report.py` `journal.py` `walkforward.py` `portfolio.py` `basket.py` `riskparity.py` `run_backtest.py`, `strategies/`, `tests/` |
-| `analysis/src/analysis/tests/` | 466 pytest tests (engine invariants, registry-wide strategy checks, CLI, journal, walk-forward, portfolio, basket, real-data regression) |
+| `analysis/src/analysis/tests/` | 472 pytest tests (engine invariants, registry-wide strategy checks, CLI, journal, walk-forward, portfolio, basket, real-data regression) |
 | `analysis/out/` | artifacts (CSV/JSON/SVG), gitignored |
 | `analysis/README.md` | the toolkit in detail; `journal/README.md` the journal format |
 | root `README.md` | the collector in detail (KuCoin API traps, schema, scheduling) |
@@ -49,9 +49,10 @@ place is, and what has already been learned the hard way.
 ```bash
 cargo test && cargo clippy --all-targets      # Rust
 uv sync                                       # Python env (installs the analysis member)
-uv run pytest                                 # 466 tests, ~35 s
-uv run kcs-backtest --list                    # 19 registered strategies + their parameters
+uv run pytest                                 # 472 tests, ~35 s
+uv run kcs-backtest --list                    # 22 registered strategies + their parameters
 uv run kcs-backtest --strategy tsmom --param lookback=720 --param rebalance=168
+uv run kcs-backtest --symbol WLD-USDT --last 1y --strategy volfilter-sma --param window=50 --param max_vol=0.8 --param vol_window=30
 uv run kcs-backtest --symbol BTC-USDT --last 5y --strategy stops-sma --param window=200 --param stop_loss=0.10 --param cooldown=5
 uv run kcs-backtest --symbol BTC-USDT --last 5y --strategy sma-ls    # refused: a spot account cannot short (`--allow-short` overrides)
 uv run kcs-backtest --symbol BTC-USDT --last 1y   # only the last year, warm history
@@ -297,6 +298,17 @@ single numbers and the worst ones, which is why they cannot be sized (§1.13, §
   return, and a 50% take-profit costs 20 points of return for 1.5 of drawdown. **An exit that is
   never touched is dead code; an exit that is touched costs money.** Use them for your own risk
   tolerance, not to improve the strategy (§1.11b).
+* **Damage limiters split by what they read.** The only one that ever improved risk-adjusted
+  return is the **trend exit**, because it reads *price* (§1.13). The ones that read only *risk*
+  trade return for risk: the **volatility target** is robust (positive on 9/9 assets,
+  threshold-insensitive — target 25% or 40%, window 20 or 168 barely moves it), the **volatility
+  ceiling** (`volfilter-*`, new) is fragile (at 50% three of five coins never trade at all; the
+  winning threshold is 50% for SUI, 80% for WLD/FET, 120% for SEI — a parameter to fit), the
+  **drawdown overlay** leaves Sharpe unchanged and costs more than it saves over five years
+  (0.55 → 0.48), and **stops** are dead code or a cost (§1.11b). Stacking the target and the
+  ceiling gives the best Sharpe on four of five coins (WLD 1.07, SUI 0.60, FET 0.57) with the
+  smallest drawdowns (−1.7…−21%) and the lowest return — the most conservative setting, not a
+  better one (§1.14).
 * **Rejected by measurement, in one list**: cross-sectional ranking, shorting, grid trading,
   martingale, value averaging, RSI mean reversion, inverting an SMA, reading a slow signal
   every bar on hourly data, leverage, and take-profit or stop-loss overlays on a trend rule

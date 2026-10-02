@@ -967,6 +967,43 @@ aggressive `tsmom`/`blend` variants are worth running only as a *second* book, s
 asset (crypto that fell hard), on one survivorship-biased archive (§4), and the walk-forward
 still chooses parameters on the past, which is honest but is not a guarantee about the future.
 
+### 1.14 Every mechanism that can only take exposure away
+
+"Limit the damage" is a different job from "find a signal", and the toolkit now has five ways to
+do it. The distinction that matters turned out to be **what each one reads**: the exit that reads
+*price* can add value, and the ones that read only *risk* trade return for risk.
+
+| lever | what it reads | measured verdict |
+|---|---|---|
+| **trend exit** (`sma`, `tsmom`) | price | the only thing that ever improved risk-adjusted return — it is the core, not an overlay (§1.7-1.9, §1.13) |
+| **volatility target** (`voltarget-*`) | the asset's own volatility | positive on all nine assets walked forward, best Sharpe on most, **threshold-insensitive** (target 25% vs 40%, window 20 vs 168 — a few points either way, §1.6b-test) |
+| **volatility ceiling** (`volfilter-*`, new) | the same volatility, binary | **threshold-sensitive**: at 50% three of five coins never trade at all (0.00%); at 80% the best Sharpes in the table (WLD 1.02, SUI 0.30) or −19% on ADA; the winning threshold differs per asset (SUI 50%, WLD/FET 80%, SEI 120%) — a parameter to fit, not a rule |
+| **both at once** (`voltarget-volfilter-sma`) | volatility | the best Sharpe on four of five coins (WLD 1.07, SUI 0.60, FET 0.57, ADA −0.55) with the smallest drawdowns (−1.7…−21.4%) — and the lowest return on four of five: it is the most conservative setting, not a better one |
+| **drawdown overlay** (`--dd-scale`) | the account's own equity | return and drawdown fall together and Sharpe is unchanged; over five years it costs more Sharpe than it saves (0.55 → 0.48) — a preference, not an edge |
+| **stops** (`stops-*`) | a price level | dead code when never touched, costly when touched; the intrabar convention reversed the breakout "win" (§1.11b) |
+| **portfolio gates** (`--trend-gate`, `--max-below-peak`, `--min-volatility`) | the cross-section | the trend gate lifts the wide book from 0.30 to ~0.50 Sharpe; the peak gate needs a rolling re-choice; a *turnover* floor hurts at every level (§1.3, §1.5c) |
+| **a lower cap or a bigger cash weight** | nothing | not a separate lever at all: it is `target_vol` turned down |
+
+The year 2025-10 → 2026-10 on five alts, at the same window and `vol_window=30`, shows the
+shape of it (`voltarget` at a 30% target against the binary ceiling at 80%):
+
+| coin | `voltarget-sma` | `volfilter-sma` 80% | both |
+|---|---|---|---|
+| ADA | −9.88% (−0.64) | −19.18% (−0.65) | −7.95% (**−0.55**, DD −21.4%) |
+| SEI | +11.31% (0.60) | +9.85% (0.26) | +6.53% (0.40, DD −12.4%) |
+| FET | +10.56% (0.51) | +11.78% (0.60) | +4.51% (0.57, DD **−3.5%**) |
+| SUI | +12.54% (0.50) | +13.06% (0.30) | +13.40% (**0.60**, DD −14.1%) |
+| WLD | +17.08% (0.76) | +17.61% (1.02) | +7.69% (**1.07**, DD **−1.7%**) |
+
+**The two practical conclusions.** First, the *robust* damage limiter is the volatility target: it
+is positive on nine of nine assets, its parameters barely matter, and it never sits out
+completely. Second, the *binary* ceiling is fragile in the same way a lookback is: on one asset
+and one year it can look like a big improvement (SUI Sharpe 0.50 → 1.09 at a 50% ceiling), and on
+the next asset the same ceiling means "never trade" — so it has to be treated as a parameter to
+choose per asset, with everything §1.12 says about that. If you want the most conservative
+setting that still trades, stack both (`voltarget-volfilter-sma`) and accept the lowest return for
+the smallest drawdown.
+
 ## 2. Rejected by measurement
 
 Each of these was tested on this archive, with costs, and lost. Do not re-open

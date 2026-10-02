@@ -89,12 +89,25 @@ def test_registry_rejects_an_unknown_name_and_says_what_exists():
         get_strategy("does-not-exist")
 
 
+#: A strategy whose sweep parameter is a **ceiling** has to be made permissive by *raising*
+#: it: turning a volatility limit down to 3 (as the generic rule below does for windows and
+#: lookbacks) forbids every trade, and the contract tests would then pass vacuously — which is
+#: what their own "never signals" guard is there to catch.
+PERMISSIVE = {
+    "volfilter-sma": {"max_vol": 100.0},
+    "volfilter-tsmom": {"max_vol": 100.0},
+    "voltarget-volfilter-sma": {"max_vol": 100.0},
+}
+
+
 def sample_strategy(name: str) -> Strategy:
     """A small instance of a registered strategy, for contract tests.
 
     Parameters are turned down via the declared sweep parameter, so a series of
     ten bars is enough for the strategy to actually reach a signal.
     """
+    if name in PERMISSIVE:
+        return get_strategy(name, **PERMISSIVE[name])
     sweep = sweep_parameter(name)
     return get_strategy(name, **({sweep: 3} if sweep else {}))
 

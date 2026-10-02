@@ -18,7 +18,7 @@ uv run kcs-backtest --strategy tsmom --param lookback=30 --param rebalance=7 \
     --dd-scale 10,40,25                           # cut size while the account is in drawdown
 uv run kcs-riskparity --top 5 --min-history 3y --vol-budget 0.4   # a de-risked book
 uv run kcs-journal verify        # re-check what was recorded
-uv run pytest                    # 466 tests
+uv run pytest                    # 472 tests
 ```
 
 `analysis` is a [uv](https://docs.astral.sh/uv/) workspace member: the root
@@ -144,6 +144,7 @@ analysis/
 | `strategies/tsmom.py` | `Tsmom` — time-series momentum, decided once every N bars (low turnover on purpose); `BlendTsmom` — several horizons averaged into one signal, so there is no lookback to fit |
 | `strategies/rsi_reversion.py` | `RsiReversion` — buy oversold RSI, leave on an exit level or a time stop |
 | `strategies/scaled.py` | `ScaledStrategy` — wrap any strategy and size it to a volatility target |
+| `strategies/volfilter.py` | `VolFilter` — wrap any strategy and go **flat** while the asset's realised volatility is above a ceiling, the binary sibling of the volatility target; registered as `volfilter-sma`, `volfilter-tsmom` and `voltarget-volfilter-sma` (both at once). `CONCLUSIONS.md` §1.14 measures the family: the target is robust across assets, the ceiling is a threshold to fit |
 | `strategies/breakout.py` | `DonchianBreakout` — entry channel and a *shorter* exit channel, plus `min_hold` |
 | `strategies/stops.py` | `StopsStrategy` — take-profit, stop-loss and trailing exits around any signal, registered as `stops-sma`, `stops-breakout`, `voltarget-stops-sma`. Two triggers: **on closes** (filled at the next open) and **inside the bar** through `intrabar_exits`, where the convention is stated explicitly — the stop wins if a bar touches both levels, it fills at the level, a gap through it fills at the open, a gap in your favour does not, and the trailing level is the one armed by the closes *before* the bar. `CONCLUSIONS.md` §1.11 and §1.11b measure both: an exit that is never touched is dead code, one that is touched costs money, and the soft close trigger is what made a stop look useful on a breakout (that finding reverses inside the bar) |
 | `strategies/registry.py` | registry machinery: `register`, `parameters`, `sweep_parameter` |

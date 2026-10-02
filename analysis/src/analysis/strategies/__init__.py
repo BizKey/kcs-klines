@@ -39,6 +39,7 @@ from .rsi_reversion import RsiReversion  # noqa: E402
 from .scaled import ScaledStrategy  # noqa: E402
 from .stops import StopsStrategy  # noqa: E402
 from .tsmom import Tsmom  # noqa: E402
+from .volfilter import VolFilter  # noqa: E402
 
 __all__ = [
     "Strategy",
