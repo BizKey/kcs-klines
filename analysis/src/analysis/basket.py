@@ -216,13 +216,15 @@ def run_basket(
     strict: bool = False,
     window: int | None = None,
     window_text: str | None = None,
+    since: int | None = None,
 ) -> BasketResult:
     """Run one strategy on every leg and combine the curves at fixed weights.
 
     `window` (seconds) shortens the reported stretch to the last that much of the
-    data, on top of what the legs have in common. The legs are still run over
-    their whole history, so their signals are the ones they really had: only the
-    reported window moves.
+    data, on top of what the legs have in common; `since` (an epoch second) moves the
+    window's *start* instead, which is what a walk-forward needs — one stretch at a time.
+    The legs are still run over their whole history, so their signals are the ones they
+    really had: only the reported window moves.
     """
     if not series:
         raise ValueError("a basket needs at least one symbol")
@@ -232,6 +234,8 @@ def run_basket(
     first, last = common_window(series)
     if window:
         first = max(first, last - window)
+    if since:
+        first = max(first, since)
     if first > last:
         spans = ", ".join(
             f"{symbol} {iso(bars[0].time)}..{iso(bars[-1].time)}" for symbol, bars in series.items()
@@ -563,6 +567,66 @@ def write_metrics(path: Path, result: BasketResult, *, include_curves: bool = Fa
 # --- CLI --------------------------------------------------------------------
 
 
+def _parse_day(text: str | None, flag: str) -> int | None:
+    """An ISO date (`2024-10-01`) as a UTC midnight epoch second."""
+    if not text:
+        return None
+    import datetime as dt
+
+    try:
+        return int(
+            dt.datetime.strptime(text, "%Y-%m-%d")
+            .replace(tzinfo=dt.timezone.utc)
+            .timestamp()
+        )
+    except ValueError as exc:
+        raise SystemExit(f"{flag} wants an ISO date like 2024-10-01, got {text!r}") from exc
+
+
+def _try_series(data_dir: Path | str, symbol: str, timeframe: str):
+    """The series, or `None` when the pair has no data — used only to date the archive."""
+    try:
+        return data.load_series(data_dir, symbol, timeframe)
+    except Exception:
+        return None
+
+
+def select_by_turnover(
+    data_dir: Path | str,
+    timeframe: str,
+    count: int,
+    *,
+    lookback: int,
+    reference: int,
+    quote: str = "USDT",
+    pool: list[str] | None = None,
+) -> list[tuple[str, float]]:
+    """The `count` most traded pairs by median quote turnover before `reference`.
+
+    The ranking uses **only** bars strictly before the reference date, so a basket built
+    with `--last` cannot be selected with the benefit of what happened inside the window it
+    is about to be judged on. Returns `(symbol, median turnover)` pairs, busiest first.
+    """
+    import statistics as st
+
+    from .portfolio import parse_quotes, read_closes, universes
+
+    symbols = pool if pool is not None else universes(data_dir, timeframe, quotes=parse_quotes(quote))
+    scored: list[tuple[str, float]] = []
+    for symbol in symbols:
+        try:
+            times, _closes, turnover = read_closes(data_dir, symbol, timeframe, with_volume=True)
+        except FileNotFoundError:
+            continue
+        sample = [value for moment, value in zip(times, turnover)
+                  if reference - lookback <= moment < reference and value > 0]
+        if len(sample) < max(5, lookback // 86400 // 3):
+            continue
+        scored.append((symbol, st.median(sample)))
+    scored.sort(key=lambda row: (-row[1], row[0]))
+    return scored[:count]
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="kcs-basket",
@@ -571,8 +635,29 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--symbols",
-        required=True,
-        help="comma-separated legs, e.g. BTC-USDT,ETH-USDT,SOL-USDT",
+        default=None,
+        help="comma-separated legs, e.g. BTC-USDT,ETH-USDT,SOL-USDT; with "
+             "--select-turnover it is the candidate pool instead (omit it to use the archive)",
+    )
+    parser.add_argument(
+        "--select-turnover",
+        type=int,
+        default=None,
+        metavar="N",
+        help="keep the N most traded pairs by median quote turnover just before the "
+             "reported window, so the basket is chosen by a rule rather than by hand",
+    )
+    parser.add_argument(
+        "--select-lookback",
+        default="90d",
+        metavar="PERIOD",
+        help="how long a stretch the turnover ranking looks at (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--select-quote",
+        default="USDT",
+        help="quote currency the candidate pool is filtered to (default: %(default)s; "
+             "use 'any' for every pair on disk)",
     )
     parser.add_argument("--timeframe", default="1h", help="bar size (default: %(default)s)")
     parser.add_argument(
@@ -595,6 +680,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="report only the last stretch, e.g. 1y, 6mon, 30d (the legs still see all the "
              "history before it)",
     )
+    parser.add_argument(
+        "--from",
+        dest="since",
+        default=None,
+        metavar="DATE",
+        help="start the reported window here (ISO date, e.g. 2024-10-01); with --to this "
+             "evaluates one stretch, which is what a walk-forward needs",
+    )
+    parser.add_argument(
+        "--to",
+        dest="until",
+        default=None,
+        metavar="DATE",
+        help="end the reported window here (default: the newest bar every leg shares)",
+    )
     parser.add_argument("--fee", type=float, default=0.001, help="commission per side (default: %(default)s)")
     parser.add_argument("--slippage", type=float, default=0.0, help="extra cost per side (default: %(default)s)")
     parser.add_argument("--data-dir", type=Path, default=DATA_DIR, help="root of the parquet archive")
@@ -607,24 +707,72 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    symbols = parse_symbols(args.symbols)
-    params = parse_params(args.param, args.strategy)
-
-    series: dict[str, list[Bar]] = {}
-    for symbol in symbols:
-        try:
-            series[symbol] = data.load_series(args.data_dir, symbol, args.timeframe)
-        except FileNotFoundError as exc:
-            raise SystemExit(
-                f"{symbol}: {exc}\n(`kcs-backtest --list` shows the stored series)"
-            ) from None
-
     window = None
     if args.last:
         try:
             window = data.parse_duration(args.last)
         except ValueError as exc:
             raise SystemExit(str(exc)) from None
+
+    since = _parse_day(args.since, "--from")
+    until = _parse_day(args.until, "--to")
+    if since and until and since >= until:
+        raise SystemExit("--from must come before --to")
+
+    pool = parse_symbols(args.symbols) if args.symbols else None
+    if args.select_turnover is not None:
+        if args.select_turnover < 1:
+            raise SystemExit("--select-turnover needs a positive count")
+        try:
+            lookback = data.parse_duration(args.select_lookback)
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from None
+        if pool is None:
+            from .portfolio import universes
+
+            pool = universes(args.data_dir, args.timeframe)
+        if not pool:
+            raise SystemExit(f"no {args.timeframe} series under {args.data_dir} to choose from")
+        reference = since or (
+            max(
+                (bars[-1].time for symbol in pool
+                 if (bars := _try_series(args.data_dir, symbol, args.timeframe))),
+                default=0,
+            ) - (window or 0)
+        )
+        chosen = select_by_turnover(
+            args.data_dir, args.timeframe, args.select_turnover,
+            lookback=lookback, reference=reference, quote=args.select_quote, pool=pool,
+        )
+        if len(chosen) < args.select_turnover:
+            print(f"note: only {len(chosen)} of {args.select_turnover} pairs had enough turnover "
+                  f"history before the window; the basket uses those")
+        if not chosen:
+            raise SystemExit(
+                "no pair traded in the selection window; widen --select-lookback or the pool"
+            )
+        print(f"selected by turnover: the {len(chosen)} busiest pairs in the "
+              f"{args.select_lookback} before {data.iso(reference)[:10]} (quote {args.select_quote})")
+        for symbol, turnover in chosen:
+            print(f"   {symbol:<16} median ${turnover/1e6:,.2f}M per bar")
+        symbols = [symbol for symbol, _ in chosen]
+    else:
+        if pool is None:
+            raise SystemExit("--symbols is required unless --select-turnover is given")
+        symbols = pool
+    params = parse_params(args.param, args.strategy)
+
+    series: dict[str, list[Bar]] = {}
+    for symbol in symbols:
+        try:
+            bars = data.load_series(args.data_dir, symbol, args.timeframe)
+        except FileNotFoundError as exc:
+            raise SystemExit(
+                f"{symbol}: {exc}\n(`kcs-backtest --list` shows the stored series)"
+            ) from None
+        if until:
+            bars = [bar for bar in bars if bar.time <= until]
+        series[symbol] = bars
     try:
         result = run_basket(
             series,
@@ -632,9 +780,12 @@ def main(argv: list[str] | None = None) -> int:
             params,
             args.timeframe,
             costs=Costs(fee_per_side=args.fee, slippage_per_side=args.slippage),
-            label=f"{args.timeframe} basket" + (f" (last {args.last})" if args.last else ""),
+            label=f"{args.timeframe} basket" + (
+                f" (last {args.last})" if args.last else ""
+            ) + (f" ({args.since} .. {args.until or 'now'})" if args.since else ""),
             window=window,
             window_text=args.last,
+            since=since,
         )
     except ValueError as exc:
         raise SystemExit(str(exc)) from None

@@ -605,3 +605,99 @@ def test_the_basket_cli_takes_a_period(basket_archive: Path, capsys):
     assert code == 0
     assert "(last 100d)" in printed
     assert "never rebalanced" in printed
+
+
+# --- choosing the legs by a rule ----------------------------------------------
+
+
+def _turnover_archive(tmp_path: Path, days: int = 200):
+    """Three symbols, the last one far busier than the others."""
+    root = tmp_path / "spot"
+    for symbol, base in (("BUSY-USDT", 5_000_000.0), ("MID-USDT", 500_000.0),
+                         ("QUIET-USDT", 10_000.0), ("LATE-USDT", 9_000_000.0)):
+        bars = make_bars(ramp(days), start=START + (0 if symbol != "LATE-USDT" else 60) * STEP)
+        write_archive(root, symbol, "1d", bars, turnovers=[base] * len(bars))
+    return root
+
+
+def test_the_turnover_ranking_uses_only_bars_before_the_reference(tmp_path: Path):
+    root = _turnover_archive(tmp_path)
+    reference = START + 100 * STEP
+    ranked = basket.select_by_turnover(
+        root, "1d", 4, lookback=100 * STEP, reference=reference, quote="USDT",
+    )
+    names = [symbol for symbol, _ in ranked]
+    # LATE-USDT only printed from day 60, so it has 40 bars before the reference: still
+    # eligible, and the busiest — but a later reference must be able to change the order
+    assert names[0] in ("LATE-USDT", "BUSY-USDT")
+    assert names[-1] == "QUIET-USDT"
+    early = basket.select_by_turnover(
+        root, "1d", 4, lookback=100 * STEP, reference=START + 10 * STEP, quote="USDT",
+    )
+    assert "LATE-USDT" not in [symbol for symbol, _ in early]   # no bars before then
+
+
+def test_turnover_selection_and_the_plain_universe_agree_on_a_one_name_basket(tmp_path: Path):
+    root = _turnover_archive(tmp_path)
+    ranked = basket.select_by_turnover(
+        root, "1d", 1, lookback=100 * STEP, reference=START + 150 * STEP, quote="USDT",
+    )
+    assert [symbol for symbol, _ in ranked] == ["LATE-USDT"]
+
+
+def test_cli_selects_the_legs_and_says_so(tmp_path: Path, capsys):
+    root = _turnover_archive(tmp_path)
+    code = basket.main([
+        "--data-dir", str(root), "--timeframe", "1d",
+        "--symbols", "BUSY-USDT,MID-USDT,QUIET-USDT",
+        "--select-turnover", "1", "--select-lookback", "100d",
+        "--strategy", "sma", "--param", "window=20", "--no-artifacts",
+    ])
+    printed = capsys.readouterr().out
+    assert code == 0
+    assert "selected by turnover" in printed
+    block = printed.split("selected by turnover")[1].split("====")[0]
+    assert "BUSY-USDT" in block                 # the busiest of the three
+    assert "QUIET-USDT" not in block
+
+
+# --- evaluating one explicit stretch (what a walk-forward needs) ----------------
+
+
+def test_from_and_to_bound_the_reported_window(tmp_path: Path, capsys):
+    root = _turnover_archive(tmp_path)
+    import datetime as dt
+
+    day = lambda n: dt.datetime.fromtimestamp(START + n * STEP, dt.timezone.utc).strftime("%Y-%m-%d")
+    code = basket.main([
+        "--data-dir", str(root), "--timeframe", "1d",
+        "--symbols", "BUSY-USDT,MID-USDT",
+        "--strategy", "sma", "--param", "window=20",
+        "--from", day(40), "--to", day(120), "--no-artifacts",
+    ])
+    printed = capsys.readouterr().out
+    assert code == 0
+    assert day(40) in printed and day(120) in printed
+    # the printed span is the bound that was asked for (the fixtures' bars are hourly
+    # under a daily label, so the "years" figure is the label's, not the spacing's)
+    window_line = next(line for line in printed.splitlines() if line.startswith("window"))
+    assert day(40) in window_line and day(120) in window_line
+
+
+def test_a_malformed_date_is_refused(tmp_path: Path):
+    root = _turnover_archive(tmp_path)
+    with pytest.raises(SystemExit):
+        basket.main([
+            "--data-dir", str(root), "--timeframe", "1d", "--symbols", "BUSY-USDT",
+            "--strategy", "sma", "--param", "window=20",
+            "--from", "October 2024", "--no-artifacts",
+        ])
+
+
+def test_the_turnover_ranking_reference_follows_the_window_start(tmp_path: Path, capsys):
+    """A pair that only becomes busy later must not be chosen for an early window."""
+    root = _turnover_archive(tmp_path)
+    ranking = basket.select_by_turnover(
+        root, "1d", 4, lookback=100 * STEP, reference=START + 10 * STEP, quote="USDT",
+    )
+    assert "LATE-USDT" not in [symbol for symbol, _ in ranking]

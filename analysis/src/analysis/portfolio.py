@@ -465,10 +465,17 @@ def read_closes(
     for path in files:
         table = pq.read_table(path, columns=wanted)
         columns = table.to_pydict()
+        # The collector stores quote turnover as its own column (what the exchange
+        # reported); `close * volume` is the same quantity to within a bar's move and is
+        # only a fallback. A liquidity gate should read the number, not re-derive it.
+        stored = pq.read_table(path, columns=["turnover"]).to_pydict().get("turnover") if with_volume else None
         for index, moment in enumerate(columns["time"]):
             close = columns["close"][index]
-            volume = columns["volume"][index] if with_volume else 0.0
-            pairs[moment] = (close, close * (volume or 0.0))
+            if stored is not None and index < len(stored) and stored[index]:
+                pairs[moment] = (close, float(stored[index]))
+            else:
+                volume = columns["volume"][index] if with_volume else 0.0
+                pairs[moment] = (close, close * (volume or 0.0))
     ordered = sorted(pairs)
     closes = [pairs[moment][0] for moment in ordered]
     if not with_volume:

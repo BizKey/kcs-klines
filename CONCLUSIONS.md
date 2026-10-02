@@ -13,6 +13,20 @@ the condition is stated.
 
 ## 1. The four dials, in order of leverage
 
+**Where this ends up, if you read nothing else.** The signal is the cheap part; the universe,
+the decision grid, the exit and the size of the position are what decide the result. The best
+configuration this repository has measured is:
+
+> **take the handful of pairs that trade the most, hold each one only while its close is above
+> its own ~50-bar mean, size the whole book to a 25-30% annual volatility target, and never
+> rebalance the names against each other.**
+
+Over the last five years (2021-10 … 2026-10, daily bars, 0.1%/side) the version chosen by a
+rule — the ten busiest pairs as of the window's first day — returns **+91.4% at Sharpe 0.87
+with a −17.5% drawdown**, against **−28.2%** for simply holding those ten. §1.4 and §1.5 carry
+the measurements, §1.3 the filter that keeps dying names out, §1.6 why costs decide everything
+else, and §2 what has been tried and rejected.
+
 These are ordered by how much they move an outcome, and the order is itself a
 result: the *frequency* of decisions beats the *cost* of trading, and the choice
 of signal is not on the list at all because it is worth +0.006 Sharpe across 976
@@ -226,7 +240,7 @@ premise, and it is the cleanest statement of why this repository's working rule 
 **time-series** momentum (compare an asset with its own past) and not the **cross-sectional**
 kind (compare assets with each other).
 
-### 1.2b Screening out the dying assets
+### 1.3 Screening out the dying assets
 
 The universe is a graveyard (§1.2), so the obvious question is whether a filter can refuse
 the names that are going to die. `kcs-portfolio` now takes health gates, every reading taken
@@ -269,7 +283,7 @@ winners are illiquid early names. That is the opposite of what the cross-section
 needed (§1.2), so the two rules want different universes — a conclusion that only exists
 because both were measured against the same engine.
 
-### 1.2c The best configuration found so far: trend + a volatility target on liquid names
+### 1.4 The configuration that works: trend + a volatility target on liquid names
 
 Everything above says the same thing three times: the universe decides, the exit matters, and
 sizing changes the shape of the distribution. Put together on the one universe where this
@@ -310,10 +324,40 @@ low-turnover configuration, not a cheap one to run on a thousand pairs. The rule
 analogue already exists in `kcs-riskparity` (top 5 by trailing turnover, three years of
 history, 40% volatility budget, `--trend 200d`): +868% at Sharpe 0.68 with a −47.7% drawdown
 over 8.93 years, against BTC's own 0.46 and −82.9%. **The missing piece is the same sizing on
-the gated wide book** — `kcs-portfolio` still has no volatility target, so the two halves of
-this toolkit (`kcs-riskparity`'s sizing, `kcs-portfolio`'s universe) have not been joined yet.
+the gated wide book** — and it is now joined: `kcs-portfolio --vol-target` sizes the book,
+`kcs-riskparity`'s sizing and `kcs-portfolio`'s universe meet in §1.5, and the answer there is
+that a narrow book of liquid names beats a wide one even when both are sized.
 
-### 1.2d The three approaches on one window, and the answer is not the wide book
+### 1.5a Walk-forward: the configuration survives five separate years
+
+The configuration has one five-year window behind it in §1.4, which is exactly the shape of
+result that turns out to be a single regime. So it was re-run as five consecutive one-year
+windows, with the names chosen by turnover **strictly before each window started** — no
+parameter is re-fitted, only the selection date moves:
+
+| window | strategy | same names held | Sharpe | max DD |
+|---|---|---|---|---|
+| 2021-10 → 2022-10 (the crash) | **−7.85%** | −69.74% | −0.84 | −15.3% |
+| 2022-10 → 2023-10 | **−0.30%** | −21.03% | −0.03 | −9.0% |
+| 2023-10 → 2024-10 | +41.51% | +209.50% | 1.82 | −10.7% |
+| 2024-10 → 2025-10 | +21.55% | +69.09% | 1.35 | −10.8% |
+| 2025-10 → 2026-10 | **+11.30%** | −23.99% | 0.77 | −10.5% |
+
+Compounded, the five windows return **+75.9%** with no losing year worse than **−7.85%** and a
+worst drawdown of **−15.3%**; the passive hold of the same names compounded to **−52.4%** over
+the same five stretches (−69.7%, −21.0%, +209.5%, +69.1%, −24.0%). The rule beats the passive in
+three of five years — the two it loses are the strongest bull years, where being only ~18%
+invested costs it (+41.5% against +209.5%) — and it wins the disasters by a mile: in the year
+that destroyed the sign book (−65%, §1.2) it lost **7.85%**.
+
+Two more things the walk-forward settles. Re-selecting the names every year **does not help**:
++75.9% compounded against +91.4% for the single selection made once at the start, so the
+turnover ranking is stable enough that re-doing it is churn. And the same rule on the
+hand-picked five majors over the same five windows returns +127.0% — better on return, with the
+same shape (it also loses only 7.4% in the crash year) — which says the *rule* carries the
+protection and the *names* carry the extra return.
+
+### 1.5 The three approaches on one window, and the answer is not the wide book
 
 The sizing half and the universe half are joined now: `kcs-portfolio` takes `--vol-target`,
 `--vol-window`, `--vol-cap`/`--vol-floor`, and it sizes the book from the **unscaled** book's
@@ -333,7 +377,7 @@ years — the window with no 2021 mania in it — the three candidate approaches
 Three conclusions, in order of importance.
 
 **1. The result does not depend on hindsight** — the open thread this repository has carried
-since §1.6. The five names a rule could have picked on 2021-08-04 (the top five by trailing
+since §1.9. The five names a rule could have picked on 2021-08-04 (the top five by trailing
 turnover) are `BTC, ETH, XRP, ADA, DOGE`, not the hand-picked `BTC, ETH, SOL, XRP, BNB` (SOL
 was not even in the top twelve then). The same rule on that honest five returns +123.62% at
 Sharpe 0.87, and on the honest ten **+163.94% at Sharpe 1.17 with a −16.6% drawdown** — better
@@ -349,11 +393,11 @@ largest improvement measured on that book. But 0.18 is still far below the narro
 **3. Re-equalising between names destroys the edge.** `kcs-riskparity` uses the same idea
 (rule-picked names, a volatility budget, a trend gate) and lands at +50% with Sharpe 0.19,
 because it re-equalises the book every month — averaging down into the weakest leg, exactly
-what §1.6 measured on the two-name book. The basket holds **fixed weights** and never
+what §1.9 measured on the two-name book. The basket holds **fixed weights** and never
 rebalances, so a winner keeps its weight while it runs. The comparison is not "which tool is
 better" but "rebalancing a five-name trend book is a cost, not a service".
 
-### 1.3 Costs
+### 1.6 Costs
 
 KuCoin spot VIP0 is not 0.1% for everyone: class A is 0.1/0.1% maker/taker, class
 B is 0.2/0.2, class C is 0.3/0.3, and the archive splits **496 A / 236 B / 264 C**
@@ -379,7 +423,7 @@ year. This is why the archive's headline experiment looks the way it does — SM
 **Consequence:** a rule has to trade rarely and only on liquid pairs. No entry
 logic measured here comes close to outweighing this.
 
-### 1.4 Trend following on liquid survivors is the only thing that survived
+### 1.7 Trend following on liquid survivors is the only thing that survived
 
 The rule: long while the price is above where it was 30 days ago, decided once a
 week, flat otherwise, spot, no leverage, no stops. Across the whole archive, with
@@ -401,7 +445,7 @@ halving both drawdown and volatility (73% against 129%).
 **It is a risk-reduction rule, not a money printer.** 35% of series are
 profitable, the median Sharpe is −0.22, and only 9% clear Sharpe 0.5.
 
-### 1.5 The positive mean is a handful of assets
+### 1.8 The positive mean is a handful of assets
 
 | trimming | mean return | median |
 |---|---|---|
@@ -422,7 +466,7 @@ histories are recent listings that mostly die; long ones have already survived.
 Taking only series with 5+ years: 1,186 series, 50% profitable, **92% beat
 holding**, median Sharpe 0.00, median 29 trades.
 
-### 1.6 Diversifying the same rule across liquid survivors is where it works
+### 1.9 Diversifying the same rule across liquid survivors is where it works
 
 Fixed 20% weights, 30-day lookback, weekly decision, 1h:
 
@@ -454,7 +498,7 @@ Two caveats that matter more than the numbers:
 
 ---
 
-### 1.7 The same signal, built two ways
+### 1.10 The same signal, built two ways
 
 `--select sign` and `--strategy tsmom` read the **same** signal: the close above its level
 `lookback` bars ago, on the same absolute grid, held between decisions. It is literally the
@@ -860,9 +904,11 @@ you sample a slow signal fast; at daily frequency there is nothing to fix.
 ### The stack I would actually run
 
 1. **Universe** — five to ten of the most liquid majors, chosen by a rule (trailing
-   turnover, at least three years of history, re-selected monthly or quarterly),
-   never by hand. The hand-picked five are the largest remaining weakness in the
-   best result in this file.
+   turnover strictly before the window you are judging, §1.3–1.5), never by hand. This
+   *was* the largest weakness in this file and it is now measured: the same rule on the
+   top five by turnover as of 2021-08-04 returns +123.6% at Sharpe 0.87 and on the top ten
+   **+163.9% at 1.17**, both with a −17…−21% drawdown, so the rule does not need the
+   hindsight. `kcs-basket --select-turnover N --last …` does it in one command.
 2. **Signal** — on a basket, the horizon *blend* (1/2/4/8 weeks, majority vote):
    the same return as a tuned lookback with 20 points less drawdown and nothing to
    fit. On a single asset, a 30-day TSMOM or a 150–200-day SMA — the two are a coin
@@ -871,11 +917,16 @@ you sample a slow signal fast; at daily frequency there is nothing to fix.
    (§1.1: +0.38 Sharpe, and it survives a zero fee). At daily frequency there is
    nothing to fix: SMA 200 every bar and weekly were 0.66 against 0.62 on BTC.
    Monthly is worse than weekly at both frequencies.
-4. **Sizing** — equal weight across the names that pass; a volatility target (~40% a
-   year) **on concentrated positions**, where it is the best risk-shape tool measured
-   (SMA 200 + vol target on BTC: Sharpe 0.71, drawdown −26.3%, 19 trades in five
-   years), not on an already-diversified basket, where it only de-risks; cash for the
-   rest, no leverage.
+4. **Sizing** — this is the knob that turned out to matter most, and it belongs on the whole
+   book, not only on single positions. A 25–30% annual target on a five-to-ten-name trend
+   basket is the best risk-adjusted configuration measured anywhere in this file (§1.4):
+   Sharpe 0.87–1.17 with a −17…−21% drawdown against ~0.35 and −79% for holding the same
+   names. It also repairs the wide book (§1.5): the gated 836-pair rule goes from +2,675% at
+   Sharpe 0.49 and −86.8% to +655% at **0.73** and **−53.8%**, with the commission bill
+   falling from 1,559% of capital to 113%. Lower targets buy Sharpe (25% beat 40% on every
+   window measured); the cap is 1.0 — no leverage; equal weight inside the book, and **never**
+   rebalance the names against each other monthly, which averages down into the weakest leg
+   (Sharpe 0.19 against 0.87 for the same idea).
 5. **Costs** — budget at least 0.1% per side on majors and much worse elsewhere;
    every number here already pays it.
 6. **Never** — leverage (83% of 3x runs were liquidated), shorting, pairs whose
@@ -884,12 +935,17 @@ you sample a slow signal fast; at daily frequency there is nothing to fix.
 
 ### In one line
 
-Best measured five-year outcome: **+203% (24.8% a year) with a −51% drawdown** (a tuned
-lookback on five majors) or the same money at **+199% with a −31.7% drawdown** from the
-blend, which needs no tuning. Best risk shape: **+185% (23.3% a year) with a −26.3%
-drawdown and 19 trades in five years** (`voltarget-sma` on BTC daily). Nothing in this
-repository supports ~5% a month; the four things that destroy an account here are
-measured in §1.1, §1.3 and §5 — turnover, leverage, shorting and illiquid pairs.
+Best measured five-year outcome: **the ten busiest pairs, a 50-bar trend filter per name and
+a 30% volatility target — +91% at Sharpe 0.87 with a −17.5% drawdown**, chosen by rule as of
+the window's first day and reproducibly exactly that by one command
+(`kcs-basket --select-turnover 10 --timeframe 1d --strategy voltarget-sma --param window=50
+--param target_vol=0.30 --last 5y`); the equal-weight hold of the same ten is −28%. The tuned
+hourly alternatives still win on raw return (+199% from the blend, +203% from a tuned
+lookback on five majors) but carry two to three times the drawdown, and on BTC alone every
+one of these rules **lost** money over the same five years (−49…−61%) while holding gained
++75% — which is the whole argument for a basket. Nothing in this repository supports ~5% a
+month; the four things that destroy an account here are measured in §1.1, §1.2 and §5 —
+turnover, leverage, shorting and illiquid pairs.
 Size so that a −50% year is survivable, keep the `--buy-hold` line on the chart, and
 treat any single multiple as noise until a walk-forward agrees with it.
 
@@ -897,43 +953,29 @@ treat any single multiple as noise until a walk-forward agrees with it.
 
 ## 7. Next steps, in priority order
 
-1. **Remove the hindsight from the asset list.** The best result here uses five
-   hand-picked survivors. Replace it with a rule — e.g. every perp-listed pair
-   with 5+ years of history, re-selected quarterly on data available at the time —
-   and re-measure the basket. If the edge survives a rule-based universe it is
-   real; if it does not, the +207% was selection. *Partly answered since this was
-   written:* applying the history filter to the cross-sectional book moved the passive
-   baseline nine points and the momentum ranking none (§1.2), so a rule-based universe
-   will not rescue a ranking that is anti-informative — the open question is whether it
-   rescues the *basket of hand-picked survivors*, which is a different test.
-2. **Per-symbol spread and slippage** instead of a flat 0.1% taker. This is the
-   last unmodelled part of the cost picture and it bites exactly the pairs that
-   produce the tail.
-3. **Walk-forward the basket and the portfolio**, not just a single series. Only
-   one rule on one asset currently has an honest out-of-sample number.
-4. **Intrabar stops — last.** Time-based exits already work and stops are paid for
-   in commission; there is no measured evidence they would help.
-5. **Walk-forward the trend lookback.** The two halves are now connected —
-   `kcs-riskparity --trend 30d` sizes a book *and* leaves the market — and the gate does
-   what it promises: on the 12 months that exposed the problem it turned −36.24% into
-   −3.53% with the drawdown cut from −58.6% to −17.6%. But it did that by being at work
-   only 25% of the time, and over eight years a fast gate costs more return than it
-   saves (top 5: +1071% ungated, +177% at 30d, +868% at 200d). The lookback is now the
-   module's most powerful and least justified knob: +0.41% / −3.53% / −28.70% on the same
-   12 months at 7d / 30d / 90d, with a different best value at each horizon. It needs the
-   treatment `kcs-walkforward` gives a strategy — re-choose it per window on past data
-   only — before any of these numbers means anything.
-6. **Per-symbol spread and slippage** instead of a flat 0.1% taker. This is the
-7. **Do not touch shorting, leverage or small pairs.** The data is unambiguous on
-   all three, and all three are in the same direction as the losses this project
-   was built to understand.
-
----
+1. **Walk-forward is done for the basket (§1.5a) — extend it to the portfolio.** Five
+   consecutive one-year windows with the selection made before each window: compounded +75.9%,
+   worst year −7.85%, worst drawdown −15.3%, against −52.4% for holding the same names. The
+   same treatment has not been applied to the wide book's gates or to `kcs-portfolio
+   --vol-target`, and those dials have plateaus that were fitted on the whole history.
+2. **The universe question is now answered for this rule.** "Remove the hindsight from the
+   hand-picked asset list" — the thread this file opened at §1.9 — is closed: names chosen by
+   turnover as of the window's first day do at least as well as the hand-picked five
+   (`kcs-basket --select-turnover N`). What remains open is whether the *selection rule*
+   itself holds up when the window moves, which is item 1.
+3. **Per-symbol spread and slippage** instead of a flat 0.1% taker. This is the last unmodelled
+   part of the cost picture and it bites exactly the pairs that produce the tail — and the
+   winning configuration trades the busiest names, where it should bite least.
+4. **Walk-forward the health-gate thresholds** (`--max-below-peak` has no plateau; `--trend-gate`
+   does) and the sizing dial (`--vol-target`/`--vol-window`), which is the knob with the largest
+   measured effect on the wide book.
+5. **Intrabar stops — last.** Time-based exits already work and stops are paid for in
+   commission; there is no measured evidence they would help.
 
 ## 8. Reproducing the headline numbers
 
 ```bash
-uv run pytest                          # 417 tests, ~28 s
+uv run pytest                          # 423 tests, ~32 s
 
 # one asset
 uv run kcs-backtest --symbol BTC-USDT --strategy tsmom \
@@ -943,7 +985,7 @@ uv run kcs-backtest --symbol BTC-USDT --strategy tsmom \
 uv run kcs-portfolio --timeframe 1d --lookback 7 --rebalance 7 --select sign \
     --trend-gate 200 --pairs-csv analysis/out/gated.csv
 
-# the same book without them, which is what the tables in §1.2b compare against
+# the same book without them, which is what the tables in §1.3 compare against
 uv run kcs-portfolio --timeframe 1d --lookback 7 --rebalance 7 --select sign
 
 # a basket of named assets: combined curve, CSV, SVG chart and JSON
@@ -983,6 +1025,14 @@ Four shells in parallel finish the 4,434 series in about two and a half minutes
 (`/dev/shm` is not writable in some sandboxes, so `multiprocessing` is not an
 option there; shard the list instead).
 
+**The configuration that works, in one command** (chosen by rule as of the window's first
+day, no hand-picked names):
+
+```bash
+uv run kcs-basket --select-turnover 10 --timeframe 1d --strategy voltarget-sma \
+    --param window=50 --param target_vol=0.30 --last 5y
+```
+
 **The three-approach comparison.** The rule-picked rows come from
 `uv run kcs-portfolio --timeframe 1d --lookback 7 --rebalance 7 --select sign --trend-gate 200
 --last 267` (with and without `--vol-target 25%`), the narrow ones from
@@ -992,7 +1042,7 @@ chosen by median quote turnover over the 90 days before the window opened (a thr
 script: rank every USDT pair by that median, take the top five or ten). `kcs-riskparity`
 rows use `--min-history 3y --last 1870d`.
 
-**The gate experiment and its placebo.** The tables in §1.2b come from a throwaway script
+**The gate experiment and its placebo.** The tables in §1.3 come from a throwaway script
 that built the panels once and then, for each configuration, ran the same book through
 `run_portfolio(gates=...)`; the placebo repeated each run with the `gates` readings rotated
 between symbols (`random.Random(seed).shuffle` over the panels' gate lists), which keeps the

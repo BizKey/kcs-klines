@@ -18,7 +18,7 @@ uv run kcs-backtest --strategy tsmom --param lookback=30 --param rebalance=7 \
     --dd-scale 10,40,25                           # cut size while the account is in drawdown
 uv run kcs-riskparity --top 5 --min-history 3y --vol-budget 0.4   # a de-risked book
 uv run kcs-journal verify        # re-check what was recorded
-uv run pytest                    # 417 tests
+uv run pytest                    # 423 tests
 ```
 
 `analysis` is a [uv](https://docs.astral.sh/uv/) workspace member: the root
@@ -36,6 +36,34 @@ the repository root (`kcs-klines backfill`), which writes KuCoin Spot OHLCV as
 Parquet under `data/kucoin/spot/<SYMBOL>/<TIMEFRAME>/`.
 
 ---
+
+**Evaluating one stretch, which is what a walk-forward needs.** `--from 2024-10-01 --to
+2025-10-01` bounds the reported window by date instead of "the last N", so the same rule can be
+judged one year at a time with the selection made before each window:
+
+```bash
+for pair in "2021-10-01 2022-10-01" "2022-10-01 2023-10-01" "2023-10-01 2024-10-01" \
+            "2024-10-01 2025-10-01" "2025-10-01 2026-10-01"; do
+  set -- $pair
+  uv run kcs-basket --select-turnover 10 --timeframe 1d --strategy voltarget-sma \
+      --param window=50 --param target_vol=0.30 --from $1 --to $2 --no-artifacts
+done
+# compounded +75.9%; worst year −7.85%; worst drawdown −15.3%; the same names held: −52.4%
+```
+
+**Choosing the legs by a rule.** `--select-turnover N` replaces a hand-typed `--symbols` list
+with the N busiest pairs by median quote turnover over `--select-lookback` (default `90d`)
+**immediately before the reported window**, so `--last 5y` cannot be selected with hindsight
+from inside its own window. `--symbols` then becomes the candidate pool (omit it to use the
+whole archive) and `--select-quote` (default `USDT`) filters that pool. The chosen names and
+their median turnover are printed. This is what makes the configuration in `CONCLUSIONS.md`
+§1.4 reproducible in one command instead of a script:
+
+```bash
+uv run kcs-basket --select-turnover 10 --timeframe 1d --strategy voltarget-sma \
+    --param window=50 --param target_vol=0.30 --last 5y
+# +91.43% at Sharpe 0.87 and a −17.47% drawdown, against −28.19% for holding the same ten
+```
 
 ## Layout
 
@@ -138,6 +166,14 @@ uv run kcs-portfolio --timeframe 1d --lookback 30 --rebalance 30 --select sign -
 * `--select rank` (the default) takes a slice of the sorted cross-section: `--top`
   is a fraction below 1 or an absolute count at 1 or more. It holds the same number
   of names whatever the market does.
+* **The book can be sized to a volatility target** (`--vol-target 25% --vol-window 12
+  --vol-cap 1 --vol-floor 0`): the whole book is scaled by `target / realised`, where the
+  reading is the **unscaled** book's own completed periods — measuring the account instead
+  would divide by a volatility that already contains the multiplier. `--vol-window` is in
+  rebalance periods, not bars (the strategy registry's `vol_window` is in bars). It is the
+  largest single improvement measured on the wide book: Sharpe 0.49 → 0.73, drawdown
+  −86.8% → −53.8%, commission 1,559% of capital → 113%. The report prints the average
+  multiplier, so you can see how much of the capital was actually at work;
 * **Health gates refuse the names that are about to die**, all read from bars at or before
   the rebalance date: `--trend-gate N` (close at or above its own N-bar mean; **100–200 works
   and the plateau is wide**), `--max-below-peak P` (drop names more than P below their own
