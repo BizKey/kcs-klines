@@ -31,8 +31,7 @@ from __future__ import annotations
 import argparse
 import itertools
 import math
-import statistics
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import Costs, data, engine, metrics
@@ -96,7 +95,9 @@ class WalkForwardResult:
         """Share of test windows that made money."""
         if not self.outcomes:
             return 0.0
-        return sum(1 for o in self.outcomes if o.test.total_return > 0) / len(self.outcomes)
+        return sum(1 for o in self.outcomes if o.test.total_return > 0) / len(
+            self.outcomes
+        )
 
     def as_dict(self) -> dict:
         return {
@@ -109,12 +110,17 @@ class WalkForwardResult:
             "parameter_counts": self.parameter_counts,
             "out_of_sample": self.oos.as_dict(),
             "buy_and_hold": self.benchmark.as_dict(),
-            "costs": {"fee_per_side": self.costs.fee_per_side, "slippage_per_side": self.costs.slippage_per_side},
+            "costs": {
+                "fee_per_side": self.costs.fee_per_side,
+                "slippage_per_side": self.costs.slippage_per_side,
+            },
             "warnings": list(self.warnings),
         }
 
 
-def split_bounds(n_bars: int, train: int, test: int, step: int | None = None) -> list[Split]:
+def split_bounds(
+    n_bars: int, train: int, test: int, step: int | None = None
+) -> list[Split]:
     """Roll a train/test window pair forward through a series of `n_bars` bars.
 
     `step` defaults to `test`, which tiles the series with non-overlapping test
@@ -150,7 +156,10 @@ def expand_grid(grid: dict[str, list[object]]) -> list[dict]:
     for key in keys:
         if not grid[key]:
             raise ValueError(f"the grid has no values for {key!r}")
-    return [dict(zip(keys, values)) for values in itertools.product(*(grid[k] for k in keys))]
+    return [
+        dict(zip(keys, values))
+        for values in itertools.product(*(grid[k] for k in keys))
+    ]
 
 
 def slice_equity(equity: list[float], start: int, end: int) -> list[float]:
@@ -227,8 +236,13 @@ def run_walkforward(
             strategy = get_strategy(strategy_name, **params)
             history = bars[: split.train_end]
             run = engine.run_backtest(
-                history, strategy.targets(history), timeframe, costs, label=strategy.slug,
-                strict=True, spot_only=not allow_short,
+                history,
+                strategy.targets(history),
+                timeframe,
+                costs,
+                label=strategy.slug,
+                strict=True,
+                spot_only=not allow_short,
             )
             segment = slice_equity(run.equity, split.train_start, split.train_end)
             scored.append((params, metrics.performance(segment, per_year)))
@@ -239,8 +253,13 @@ def run_walkforward(
         strategy = get_strategy(strategy_name, **params)
         history = bars[: split.test_end]
         run = engine.run_backtest(
-            history, strategy.targets(history), timeframe, costs, label=strategy.slug,
-            strict=True, spot_only=not allow_short,
+            history,
+            strategy.targets(history),
+            timeframe,
+            costs,
+            label=strategy.slug,
+            strict=True,
+            spot_only=not allow_short,
         )
         test_segment = slice_equity(run.equity, split.train_end, split.test_end)
         test_performance = metrics.performance(test_segment, per_year)
@@ -252,8 +271,12 @@ def run_walkforward(
 
         # Buy & hold over the same window, paying one entry and one exit per span.
         start_close = bars[split.train_end - 1].close
-        benchmark_segment = [bar.close / start_close for bar in bars[split.train_end : split.test_end]]
-        benchmark_segment = [value * (1.0 - costs.rate) ** 2 for value in benchmark_segment]
+        benchmark_segment = [
+            bar.close / start_close for bar in bars[split.train_end : split.test_end]
+        ]
+        benchmark_segment = [
+            value * (1.0 - costs.rate) ** 2 for value in benchmark_segment
+        ]
         benchmark_curve.extend(value * benchmark_running for value in benchmark_segment)
         benchmark_running *= benchmark_segment[-1]
 
@@ -298,7 +321,9 @@ def render(result: WalkForwardResult, bars: list[Bar]) -> str:
     lines: list[str] = []
     add = lines.append
     add("=" * 100)
-    add(f"{result.label} — {result.strategy}, chosen by train {result.metric}, {result.costs}")
+    add(
+        f"{result.label} — {result.strategy}, chosen by train {result.metric}, {result.costs}"
+    )
     add("=" * 100)
     add(f"candidates  : {result.candidates} parameter set(s) per split")
     add(
@@ -313,7 +338,9 @@ def render(result: WalkForwardResult, bars: list[Bar]) -> str:
     add("-" * 100)
     for outcome in result.outcomes:
         split = outcome.split
-        chosen = ", ".join(f"{key}={value}" for key, value in sorted(outcome.params.items()))
+        chosen = ", ".join(
+            f"{key}={value}" for key, value in sorted(outcome.params.items())
+        )
         add(
             f"{split.index:>3}  "
             f"{iso(bars[split.train_start].time) + ' .. ' + iso(bars[split.train_end - 1].time):<28}"
@@ -332,7 +359,9 @@ def render(result: WalkForwardResult, bars: list[Bar]) -> str:
     def row(label: str, left: str, right: str) -> None:
         add(f"{label:<26}{left:>18}{right:>18}")
 
-    row("total return", pct(result.oos.total_return), pct(result.benchmark.total_return))
+    row(
+        "total return", pct(result.oos.total_return), pct(result.benchmark.total_return)
+    )
     row("CAGR", pct(result.oos.cagr), pct(result.benchmark.cagr))
     row("annualised vol", pct(result.oos.ann_vol), pct(result.benchmark.ann_vol))
     row("Sharpe (rf=0)", f"{result.oos.sharpe:.2f}", f"{result.benchmark.sharpe:.2f}")
@@ -400,7 +429,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--allow-short",
         action="store_true",
         help="let the strategy take short exposure; by default the harness refuses it, because "
-             "a spot account cannot hold a negative balance",
+        "a spot account cannot hold a negative balance",
     )
     parser.add_argument(
         "--grid",
@@ -411,12 +440,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--train", type=int, default=3000, help="train window, in bars")
     parser.add_argument("--test", type=int, default=1000, help="test window, in bars")
-    parser.add_argument("--step", type=int, default=None, help="roll step in bars (default: one test window)")
-    parser.add_argument("--metric", default="sharpe", choices=METRICS, help="what to choose parameters by")
+    parser.add_argument(
+        "--step",
+        type=int,
+        default=None,
+        help="roll step in bars (default: one test window)",
+    )
+    parser.add_argument(
+        "--metric",
+        default="sharpe",
+        choices=METRICS,
+        help="what to choose parameters by",
+    )
     parser.add_argument("--fee", type=float, default=0.001)
     parser.add_argument("--slippage", type=float, default=0.0)
     parser.add_argument("--data-dir", type=Path, default=data.DEFAULT_DATA_DIR)
-    parser.add_argument("--json", type=Path, default=None, help="write the summary as JSON here")
+    parser.add_argument(
+        "--json", type=Path, default=None, help="write the summary as JSON here"
+    )
     return parser.parse_args(argv)
 
 
@@ -438,7 +479,9 @@ def main(argv: list[str] | None = None) -> int:
         result = _walkforward_or_exit(bars, args, grid)
     except ValueError as exc:
         raise SystemExit(str(exc)) from None
-    print(f"loaded {len(bars):,} bars from {args.data_dir / args.symbol / args.timeframe}")
+    print(
+        f"loaded {len(bars):,} bars from {args.data_dir / args.symbol / args.timeframe}"
+    )
     print(render(result, bars))
 
     if args.json:

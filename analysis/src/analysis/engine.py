@@ -20,7 +20,7 @@ Two invariants are checked on every run:
 from __future__ import annotations
 
 import math
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import dataclass, field, replace
 
 from .data import Bar, bars_per_year as bars_per_year_of, iso
 from .metrics import Performance, cagr, performance
@@ -196,7 +196,11 @@ class BacktestResult:
     @property
     def geo_trade(self) -> float:
         """Mean compounded return per trade — the rate the equity curve actually grew at."""
-        returns = [t.net_return for t in self.closed_trades if t.net_return is not None and t.net_return > -1]
+        returns = [
+            t.net_return
+            for t in self.closed_trades
+            if t.net_return is not None and t.net_return > -1
+        ]
         if not returns:
             return 0.0
         return math.exp(sum(math.log1p(r) for r in returns) / len(returns)) - 1.0
@@ -242,7 +246,10 @@ class BacktestResult:
         """JSON-friendly summary. Curves are omitted unless asked for."""
         data = {
             "label": self.label,
-            "costs": {"fee_per_side": self.costs.fee_per_side, "slippage_per_side": self.costs.slippage_per_side},
+            "costs": {
+                "fee_per_side": self.costs.fee_per_side,
+                "slippage_per_side": self.costs.slippage_per_side,
+            },
             "fees_paid": self.fees_paid,
             "gross_equity": self.gross_equity,
             "close_fill_equity": self.close_fill_equity,
@@ -333,7 +340,9 @@ def run_backtest(
     fees_paid = 0.0
     # What the strategy asked for, after the drawdown overlay has had its say. The
     # book and the zero-cost cross-check both read this, so they stay the same run.
-    effective = list(targets)   # index 0 keeps what the strategy asked: nothing to scale yet
+    effective = list(
+        targets
+    )  # index 0 keeps what the strategy asked: nothing to scale yet
     scales = [1.0] * n
     peak_equity = 1.0
 
@@ -349,7 +358,7 @@ def run_backtest(
         prev = positions[i - 1]
         pos = float(targets[i - 1])
         if drawdown_scale is not None:
-            peak_equity = max(peak_equity, equity[i - 1])   # the account's own high
+            peak_equity = max(peak_equity, equity[i - 1])  # the account's own high
             factor = drawdown_scale.factor(equity[i - 1], peak_equity)
             scales[i] = factor
             effective[i] = pos * factor
@@ -381,7 +390,9 @@ def run_backtest(
                 open_trade.exit_price = bars[i].open
                 open_trade.equity_at_exit = 0.0
                 open_trade.bars_held = i - open_trade.entry_index
-                open_trade.gross_return = (bars[i].open / open_trade.entry_price) ** open_trade.direction - 1.0
+                open_trade.gross_return = (
+                    bars[i].open / open_trade.entry_price
+                ) ** open_trade.direction - 1.0
                 open_trade.net_return = -1.0
                 trades.append(open_trade)
                 open_trade = None
@@ -408,7 +419,9 @@ def run_backtest(
             open_trade.exit_price = mark
             open_trade.equity_at_exit = after_costs
             open_trade.bars_held = i - open_trade.entry_index
-            open_trade.gross_return = (mark / open_trade.entry_price) ** open_trade.direction - 1.0
+            open_trade.gross_return = (
+                mark / open_trade.entry_price
+            ) ** open_trade.direction - 1.0
             open_trade.net_return = after_costs / open_trade.equity_at_entry - 1.0
             trades.append(open_trade)
             open_trade = None
@@ -438,7 +451,9 @@ def run_backtest(
         open_trade.exit_price = last.close
         open_trade.equity_at_exit = mark_to_market
         open_trade.bars_held = n - 1 - open_trade.entry_index
-        open_trade.gross_return = (last.close / open_trade.entry_price) ** open_trade.direction - 1.0
+        open_trade.gross_return = (
+            last.close / open_trade.entry_price
+        ) ** open_trade.direction - 1.0
         open_trade.net_return = mark_to_market / open_trade.equity_at_entry - 1.0
         open_trade.open_at_end = True
         trades.append(open_trade)
@@ -450,7 +465,12 @@ def run_backtest(
     gross_equity *= 1.0 + positions[-1] * (last.close / last.open - 1.0)
 
     timestamps = [b.time for b in bars]
-    perf = performance(equity, bars_per_year_of(timeframe), final_equity=mark_to_market, timestamps=timestamps)
+    perf = performance(
+        equity,
+        bars_per_year_of(timeframe),
+        final_equity=mark_to_market,
+        timestamps=timestamps,
+    )
 
     result = BacktestResult(
         label=label,
@@ -496,7 +516,9 @@ def bookkeeping_warning(result: BacktestResult) -> str | None:
     )
 
 
-def buy_and_hold(bars: list[Bar], costs: Costs | None = None, timeframe: str = "1d") -> Benchmark:
+def buy_and_hold(
+    bars: list[Bar], costs: Costs | None = None, timeframe: str = "1d"
+) -> Benchmark:
     """Passive benchmark over a whole series: see `buy_and_hold_bars`."""
     return buy_and_hold_bars(bars, timeframe, costs)
 
@@ -597,7 +619,8 @@ def restrict(
     the trade book still reproduces the curve exactly.
     """
     inside = [
-        i for i, bar in enumerate(bars)
+        i
+        for i, bar in enumerate(bars)
         if bar.time >= first and (last is None or bar.time <= last)
     ]
     if len(inside) < 3:
@@ -622,7 +645,9 @@ def restrict(
     # Mark whatever is still held at the window's last close. When the window ends at the
     # last bar this is exactly the run's `final_equity`; when it ends earlier it is the same
     # quantity for *that* bar, which is what makes a window in the middle of a series honest.
-    equity[-1] = equity[-1] * (1.0 + positions[-1] * (window[-1].close / window[-1].open - 1.0))
+    equity[-1] = equity[-1] * (
+        1.0 + positions[-1] * (window[-1].close / window[-1].open - 1.0)
+    )
 
     trades: list[Trade] = []
     for trade in result.trades:
@@ -635,7 +660,9 @@ def restrict(
 
     gross = 1.0
     for k in range(1, len(inside)):
-        gross *= 1.0 + positions[k - 1] * (bars[inside[k]].open / bars[inside[k - 1]].open - 1.0)
+        gross *= 1.0 + positions[k - 1] * (
+            bars[inside[k]].open / bars[inside[k - 1]].open - 1.0
+        )
     gross *= 1.0 + positions[-1] * (window[-1].close / window[-1].open - 1.0)
 
     perf = performance(equity, per_year, final_equity=equity[-1], timestamps=times)
@@ -652,9 +679,14 @@ def restrict(
         benchmark=buy_and_hold_bars(window, timeframe, result.costs),
         close_fill_equity=close_fill_final_equity(window, targets, result.costs),
         warnings=list(result.warnings),
-        exposure_scale=[result.exposure_scale[i] for i in inside] if result.exposure_scale else [],
+        exposure_scale=[result.exposure_scale[i] for i in inside]
+        if result.exposure_scale
+        else [],
     )
-    if any(t.entry_index == start and t.equity_at_entry == 1.0 and t.bars_held for t in trades):
+    if any(
+        t.entry_index == start and t.equity_at_entry == 1.0 and t.bars_held
+        for t in trades
+    ):
         restricted.warnings.append(
             "a position was already open when the window began: it is shown as a trade from "
             "the window's first bar, and its earlier history is not part of this window"
@@ -686,7 +718,9 @@ def _carried_trade(trade: Trade, bars: list[Bar], start: int, base: float) -> Tr
     )
 
 
-def close_fill_final_equity(bars: list[Bar], targets: list[float], costs: Costs | None = None) -> float:
+def close_fill_final_equity(
+    bars: list[Bar], targets: list[float], costs: Costs | None = None
+) -> float:
     """Same signals, but filled at the signal bar's own close.
 
     The usual backtest convention, kept only as a sensitivity check: it assumes

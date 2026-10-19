@@ -22,8 +22,8 @@ place is, and what has already been learned the hard way.
   and the two single-asset winners on BTC (`voltarget-sma`, `tsmom-blend`). Every entry is
   re-checked with `uv run kcs-journal verify`, which re-runs it and compares every metric and
   every trade.
-* `data/` (1.4 GB, **998 symbols / 4,990 series** — every symbol now has all five
-  timeframes, gitignored) is the archive. It is
+* `data/` (1.4 GB, **1003 symbols / 5,009 series** — every symbol now has all five
+  timeframes except the few newest, gitignored) is the archive. It is
   **alive**: a collector run can append bars while you are working. Two things to know
   about what is in it. First, the exchange now lists **tokenised equities** alongside
   crypto (`AAPLX-USDT`, `TSLAX-USDT`, `HOODX-USDT`, `MSTRX-USDT`, `CRCLX-USDT`, `SPCXX-USDT`,
@@ -32,8 +32,9 @@ place is, and what has already been learned the hard way.
   `kcs-riskparity` now take `--exclude-equities` and **name any they keep** in the report;
   `data.TOKENISED_EQUITY_SYMBOLS` is the list, and a test fails whenever an X-suffixed pair
   appears that is neither on it nor on `CRYPTO_X_SUFFIX_ALLOWLIST` — a coin like `AVAX` ends
-  in X, so the suffix alone cannot decide. Second, `WMTX-USDT` lags the collector persistently (a week
-  behind on both 1h and 1d as of 2026-10-01) — worth a targeted `kcs-klines` sync, since
+  in X, so the suffix alone cannot decide. Second, `WMTX-USDT` lags the collector persistently
+  and by more each run (**25 days** behind on both 1h and 1d as of 2026-10-19, against one week
+  a month earlier) — a targeted `kcs-klines` sync, since
   every other series is current and the daily calendar ends on the newest bar available.
 
 ## Map
@@ -43,7 +44,7 @@ place is, and what has already been learned the hard way.
 | `src/` | Rust collector: `kucoin/client.rs`, `storage/parquet_store.rs`, `collector.rs`, `verify.rs`, `status.rs` |
 | `tests/` | Rust tests; `live_api.rs` is `--ignored` and hits the real exchange |
 | `analysis/src/analysis/` | `data.py` `metrics.py` `engine.py` `report.py` `journal.py` `walkforward.py` `portfolio.py` `basket.py` `riskparity.py` `run_backtest.py`, `strategies/`, `tests/` |
-| `analysis/src/analysis/tests/` | 512 pytest tests (engine invariants, registry-wide strategy checks, CLI, journal, walk-forward, portfolio, basket, real-data regression) |
+| `analysis/src/analysis/tests/` | 514 pytest tests (engine invariants, registry-wide strategy checks, CLI, journal, walk-forward, portfolio, basket, real-data regression) |
 | `analysis/out/` | artifacts (CSV/JSON/SVG), gitignored |
 | `analysis/README.md` | the toolkit in detail; `journal/README.md` the journal format |
 | `analysis/src/analysis/dashboard.py` + `dashboard.html` | the local kline dashboard: a stdlib HTTP server over the Parquet, charted with **vendored** TradingView Lightweight Charts (Apache-2.0, `vendor/`); `/canvas` serves the old hand-written renderer |
@@ -54,7 +55,7 @@ place is, and what has already been learned the hard way.
 ```bash
 cargo test && cargo clippy --all-targets      # Rust
 uv sync                                       # Python env (installs the analysis member)
-uv run pytest                                 # 512 tests, ~45 s
+uv run pytest                                 # 514 tests, ~60 s
 uv run kcs-backtest --list                    # 22 registered strategies + their parameters
 uv run kcs-backtest --strategy tsmom --param lookback=720 --param rebalance=168
 uv run kcs-backtest --symbol WLD-USDT --last 1y --strategy volfilter-sma --param window=50 --param max_vol=0.8 --param vol_window=30
@@ -271,10 +272,14 @@ single numbers and the worst ones, which is why they cannot be sized (§1.13, §
 * **Costs decide everything — on the strategy that trades a lot.** The wide 7/7 book halves its
   result for every extra 0.1% per side (§1.6); the winning basket, which holds ten liquid pairs
   ~18% of the time, still returns +58% at Sharpe 0.61 when the fee is **five times** the
-  modelled 0.1%, and charging each leg its own estimated spread (`--spread-model
-  corwin-schultz`, hourly bars) costs it 0.04 Sharpe (+91.4% → +86.1%, §1.6a). Estimate spreads
-  on the finest series available: the same estimator reads BTC at 30 bp on daily bars and
-  5.6 bp on hourly ones.
+  modelled 0.1%. Charging each leg its own estimated spread (`--spread-model corwin-schultz`,
+  hourly bars) takes it from +91.4% to **+76.57% at 0.76** on the current archive (2026-10-19)
+  — but that is **not a stable number**: the estimate is read from the hourly bars *before* the
+  window, and a backfill there doubled it (BTC 5.6 → 21.9 bp, DOT 28.2 → 52.0 bp) against the
+  +86.05% at 0.83 this line used to quote. Read the estimator as a band ("tens of basis points a
+  side, not the edge"), and note that §1.6b/§1.6c/§1.11/§1.11b were measured against the older
+  baseline, so their **deltas** are the durable part. Estimate spreads on the finest series
+  available: the same estimator reads BTC at 92 bp on daily bars and 22 bp on hourly ones.
 * **Trend following on liquid survivors is the only thing that survived** across markets, and
   its positive mean is a handful of assets — leave-one-out removes most of the multiple
   (§1.7–1.8).
@@ -330,7 +335,9 @@ single numbers and the worst ones, which is why they cannot be sized (§1.13, §
   `coefficient * per-bar volatility * sqrt(order / turnover_per_bar)` (the square-root impact
   law). On the winning basket: **+83.90% at Sharpe 0.81 against +86.05% at 0.83** with spreads
   only — 2.2 points — while $1M costs 8 points, $10M costs 24, and even $1M at the harsh
-  coefficient 0.5 leaves +51.6%. **Capacity is set by the thinnest leg** (0.5 bp of impact on
+  coefficient 0.5 leaves +51.6%. Those levels are one snapshot old (§1.6a: the spread estimates
+  that set the baseline have since doubled); the *deltas* between the rows are the durable part.
+  **Capacity is set by the thinnest leg** (0.5 bp of impact on
   BTC at $60k against 29 bp on MOVR), because every leg is held at `1/N`; a ten-name basket is
   as large as its least liquid name. Still unmodelled: partial fills and the queue, delistings
   (the archive has none), the true path *inside* a bar (the convention in §1.11b is stated, not
@@ -343,7 +350,8 @@ single numbers and the worst ones, which is why they cannot be sized (§1.13, §
   pairs in it are the ones that survived and multiplied, and the thin pairs that died are
   missing. The cost of the rule is therefore a **lower bound on the bias** — at least 17 points
   over five years — and it is the honest answer to "how much of this is survival": the +86%
-  describes the pairs that lived.
+  describes the pairs that lived. (Levels again from the earlier spread snapshot — the current
+  "keep everything" baseline is +76.57%; every floor still cheapens it, which is what matters.)
 * **`tsmom`'s defaults are hourly; on daily bars they make it a spectator.** `lookback` and
   `rebalance` count **bars** (720 and 168 = a month and a week on 1h, two years and five and a
   half months on 1d), which is why it sat out SEI and WLD entirely and lost 67% on ADA while

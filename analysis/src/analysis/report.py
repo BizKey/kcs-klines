@@ -75,7 +75,9 @@ def render(
         f"{quality.nonpositive_prices} non-positive prices"
     )
     add("")
-    add("execution   : signal on close of t, filled at open of t+1, equity marked at opens")
+    add(
+        "execution   : signal on close of t, filled at open of t+1, equity marked at opens"
+    )
     add("")
     add(f"{'metric':<26}{result.label:>18}{'buy & hold':>18}")
     add("-" * 78)
@@ -84,7 +86,11 @@ def render(
         add(f"{label:<26}{left:>18}{right:>18}")
 
     row("total return (net)", pct(perf.total_return), pct(benchmark.total_return))
-    row("total return (gross)", pct(result.gross_equity - 1.0), pct(result.benchmark.gross_equity - 1.0))
+    row(
+        "total return (gross)",
+        pct(result.gross_equity - 1.0),
+        pct(result.benchmark.gross_equity - 1.0),
+    )
     row("CAGR", pct(perf.cagr), pct(benchmark.cagr))
     row("annualised vol", pct(perf.ann_vol), pct(benchmark.ann_vol))
     row("Sharpe (rf=0)", f"{perf.sharpe:.2f}", f"{benchmark.sharpe:.2f}")
@@ -93,11 +99,31 @@ def render(
     row("time in market", pct(result.exposure), "100.00%")
     row("closed trades", f"{len(result.closed_trades)}", "1")
     row("win rate", pct(result.win_rate) if result.closed_trades else "—", "—")
-    row("avg bars held", f"{result.avg_bars_held:.0f}" if result.closed_trades else "—", "—")
-    row("avg / median trade", f"{pct(result.avg_trade)} / {pct(result.median_trade)}", "—")
-    row("geometric avg trade", pct(result.geo_trade) if result.closed_trades else "—", "—")
-    row("best / worst trade", f"{pct(result.best_trade)} / {pct(result.worst_trade)}", "—")
-    row("total fees paid", pct(result.fees_paid), f"{1 - (1 - result.costs.rate) ** 2:.2%}")
+    row(
+        "avg bars held",
+        f"{result.avg_bars_held:.0f}" if result.closed_trades else "—",
+        "—",
+    )
+    row(
+        "avg / median trade",
+        f"{pct(result.avg_trade)} / {pct(result.median_trade)}",
+        "—",
+    )
+    row(
+        "geometric avg trade",
+        pct(result.geo_trade) if result.closed_trades else "—",
+        "—",
+    )
+    row(
+        "best / worst trade",
+        f"{pct(result.best_trade)} / {pct(result.worst_trade)}",
+        "—",
+    )
+    row(
+        "total fees paid",
+        pct(result.fees_paid),
+        f"{1 - (1 - result.costs.rate) ** 2:.2%}",
+    )
     row("final equity", f"{perf.final_equity:.4f}x", f"{benchmark.final_equity:.4f}x")
     add("")
     add(
@@ -176,7 +202,13 @@ def write_equity(path: Path, bars: list[Bar], result: BacktestResult) -> None:
             )
 
 
-def write_metrics(path: Path, result: BacktestResult, quality: QualityReport, symbol: str, timeframe: str) -> None:
+def write_metrics(
+    path: Path,
+    result: BacktestResult,
+    quality: QualityReport,
+    symbol: str,
+    timeframe: str,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = result.as_dict()
     payload["symbol"] = symbol
@@ -185,7 +217,9 @@ def write_metrics(path: Path, result: BacktestResult, quality: QualityReport, sy
     path.write_text(json.dumps(payload, indent=2, default=str))
 
 
-def write_chart(path: Path, bars: list[Bar], result: BacktestResult, title: str) -> None:
+def write_chart(
+    path: Path, bars: list[Bar], result: BacktestResult, title: str
+) -> None:
     """Equity vs benchmark on a log scale, as a dependency-free SVG.
 
     Every change of position is marked with a vertical line, so the curve can be
@@ -233,7 +267,9 @@ def position_markers(times: list[int], positions: list[float]) -> list[Marker]:
             colour, what = MARKER_FLIP, "flipped"
         else:
             continue  # the same position, held at a different size
-        markers.append((i, colour, f"{iso(times[i])} UTC — {what} ({previous:g} → {current:g})"))
+        markers.append(
+            (i, colour, f"{iso(times[i])} UTC — {what} ({previous:g} → {current:g})")
+        )
     return markers
 
 
@@ -269,19 +305,27 @@ def write_curves(
         raise ValueError("nothing to plot")
     for label, values in curves.items():
         if len(values) != len(times):
-            raise ValueError(f"curve {label!r} has {len(values)} points for {len(times)} times")
+            raise ValueError(
+                f"curve {label!r} has {len(values)} points for {len(times)} times"
+            )
     marks = list(markers or [])
     for index, _, _ in marks:
         if not 0 <= index < len(times):
             raise ValueError(f"marker index {index} is outside 0..{len(times) - 1}")
     for label, level in (levels or {}).items():
         if label not in curves:
-            raise ValueError(f"level given for {label!r}, which is not one of the curves")
+            raise ValueError(
+                f"level given for {label!r}, which is not one of the curves"
+            )
         if level <= 0:
-            raise ValueError(f"level for {label!r} must be positive to sit on a log scale")
+            raise ValueError(
+                f"level for {label!r} must be positive to sit on a log scale"
+            )
     positive = [value for values in curves.values() for value in values if value > 0]
     if not positive:
-        raise ValueError("every curve is at or below zero: nothing to draw on a log scale")
+        raise ValueError(
+            "every curve is at or below zero: nothing to draw on a log scale"
+        )
 
     path.parent.mkdir(parents=True, exist_ok=True)
     pad_l, pad_r, pad_t, pad_b = 70, 24, 40, 40
@@ -299,7 +343,9 @@ def write_curves(
         return pad_l + (WIDTH - pad_l - pad_r) * i / (n - 1) if n > 1 else pad_l
 
     def y(value: float) -> float:
-        return pad_t + (HEIGHT - pad_t - pad_b) * (1 - (math.log10(max(value, floor)) - lo_exp) / span)
+        return pad_t + (HEIGHT - pad_t - pad_b) * (
+            1 - (math.log10(max(value, floor)) - lo_exp) / span
+        )
 
     def poly(values: list[float]) -> str:
         return " ".join(f"{x(i):.2f},{y(values[i]):.2f}" for i in idx)
@@ -368,7 +414,9 @@ def write_curves(
         }
         words.update(marker_words or {})
         order = [MARKER_ENTRY, MARKER_EXIT, MARKER_FLIP]
-        order += [c for c in dict.fromkeys(colour for _, colour, _ in marks) if c not in order]
+        order += [
+            c for c in dict.fromkeys(colour for _, colour, _ in marks) if c not in order
+        ]
         parts = []
         for colour in order:
             count = sum(1 for _, drawn, _ in marks if drawn == colour)
@@ -394,7 +442,7 @@ def write_curves(
         f"""<svg xmlns="http://www.w3.org/2000/svg" width="{WIDTH}" height="{HEIGHT}" viewBox="0 0 {WIDTH} {HEIGHT}">
 <rect width="{WIDTH}" height="{HEIGHT}" fill="#ffffff"/>
 <text x="{pad_l}" y="24" font-size="15" font-family="sans-serif" fill="#111">{_xml(title)}</text>
-{''.join(grid)}{''.join(axis)}
+{"".join(grid)}{"".join(axis)}
 {mark_svg}
 {body}
 {level_svg}

@@ -38,11 +38,10 @@ def _two_day_spread(first: Bar, second: Bar) -> float | None:
         return None
     if first.high < first.low or second.high < second.low:
         return None
-    beta = (math.log(first.high / first.low) ** 2
-            + math.log(second.high / second.low) ** 2)
-    gamma = math.log(
-        max(first.high, second.high) / min(first.low, second.low)
-    ) ** 2
+    beta = (
+        math.log(first.high / first.low) ** 2 + math.log(second.high / second.low) ** 2
+    )
+    gamma = math.log(max(first.high, second.high) / min(first.low, second.low)) ** 2
     alpha = (math.sqrt(2.0 * beta) - math.sqrt(beta)) / _K - math.sqrt(gamma / _K)
     return 2.0 * (math.exp(alpha) - 1.0) / (1.0 + math.exp(alpha))
 
@@ -72,7 +71,10 @@ def corwin_schultz(
 
 
 def spread_by_symbol(
-    series: dict[str, list[Bar]], *, window: int | None = None, before: int | None = None
+    series: dict[str, list[Bar]],
+    *,
+    window: int | None = None,
+    before: int | None = None,
 ) -> dict[str, float]:
     """`{symbol: estimated proportional spread}` for whichever symbols can be measured."""
     measured = {}

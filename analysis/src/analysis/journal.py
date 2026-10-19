@@ -122,7 +122,9 @@ class DataWindow:
     bars_violating_ohlc: int
 
     @classmethod
-    def of(cls, bars: list[Bar], quality: QualityReport, symbol: str, timeframe: str) -> DataWindow:
+    def of(
+        cls, bars: list[Bar], quality: QualityReport, symbol: str, timeframe: str
+    ) -> DataWindow:
         return cls(
             symbol=symbol,
             timeframe=timeframe,
@@ -362,9 +364,7 @@ def basket_entry_for(
     # the label of a basket has spaces and brackets in it, which makes an id awkward to type
     # into `kcs-journal verify --id`, so the id is built from what identifies the run instead
     return RunEntry(
-        run_id=(
-            f"{compact_stamp(recorded_at)}-basket-{timeframe}-{len(series)}legs"
-        ),
+        run_id=(f"{compact_stamp(recorded_at)}-basket-{timeframe}-{len(series)}legs"),
         recorded_at=recorded_at,
         label=result.label,
         strategy=result.strategy,
@@ -416,15 +416,23 @@ def verify_basket(
             bars = data.load_series(data_dir, symbol, leg.timeframe)
         except (FileNotFoundError, ValueError) as error:
             return Verification(
-                run_id=entry.run_id, verified_at=verified_at, status=STATUS_ERROR,
-                bars=0, digest_recorded=combined_recorded, digest_actual="",
+                run_id=entry.run_id,
+                verified_at=verified_at,
+                status=STATUS_ERROR,
+                bars=0,
+                digest_recorded=combined_recorded,
+                digest_actual="",
                 message=f"{symbol}: {error}",
             )
         sliced = window_of(bars, leg.first, leg.last)
         if not sliced:
             return Verification(
-                run_id=entry.run_id, verified_at=verified_at, status=STATUS_ERROR,
-                bars=0, digest_recorded=combined_recorded, digest_actual="",
+                run_id=entry.run_id,
+                verified_at=verified_at,
+                status=STATUS_ERROR,
+                bars=0,
+                digest_recorded=combined_recorded,
+                digest_actual="",
                 message=f"{symbol}: the archive no longer holds {leg.first}..{leg.last}",
             )
         digest = fingerprint(sliced)
@@ -439,17 +447,27 @@ def verify_basket(
     )
     try:
         result = run_basket(
-            series, entry.strategy, entry.params, timeframe, costs=costs, label=entry.label,
-            window=entry.window.get("seconds"), since=entry.window.get("since"),
+            series,
+            entry.strategy,
+            entry.params,
+            timeframe,
+            costs=costs,
+            label=entry.label,
+            window=entry.window.get("seconds"),
+            since=entry.window.get("since"),
             costs_by_symbol={
                 symbol: engine.Costs(**leg) for symbol, leg in entry.leg_costs.items()
-            } or None,
+            }
+            or None,
         )
     except (KeyError, TypeError, ValueError) as error:
         return Verification(
-            run_id=entry.run_id, verified_at=verified_at, status=STATUS_UNKNOWN_STRATEGY,
+            run_id=entry.run_id,
+            verified_at=verified_at,
+            status=STATUS_UNKNOWN_STRATEGY,
             bars=sum(len(bars) for bars in series.values()),
-            digest_recorded=combined_recorded, digest_actual=digest_actual,
+            digest_recorded=combined_recorded,
+            digest_actual=digest_actual,
             message=f"cannot rebuild the basket: {error}",
         )
 
@@ -460,12 +478,20 @@ def verify_basket(
         status = STATUS_DATA_CHANGED
         message = "metrics reproduce, but the stored bars are not the ones recorded"
     else:
-        status, message = STATUS_VERIFIED, "every leg and every metric reproduces exactly"
+        status, message = (
+            STATUS_VERIFIED,
+            "every leg and every metric reproduces exactly",
+        )
     return Verification(
-        run_id=entry.run_id, verified_at=verified_at, status=status,
+        run_id=entry.run_id,
+        verified_at=verified_at,
+        status=status,
         bars=sum(len(bars) for bars in series.values()),
-        digest_recorded=combined_recorded, digest_actual=digest_actual,
-        mismatches=mismatches, message=message, tolerance=tolerance,
+        digest_recorded=combined_recorded,
+        digest_actual=digest_actual,
+        mismatches=mismatches,
+        message=message,
+        tolerance=tolerance,
     )
 
 
@@ -515,18 +541,24 @@ def load_runs(journal_dir: Path | str = DEFAULT_JOURNAL_DIR) -> list[RunEntry]:
         try:
             entries.append(RunEntry.from_dict(json.loads(line)))
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
-            raise ValueError(f"{path}:{number} is not a valid journal entry: {error!r}") from error
+            raise ValueError(
+                f"{path}:{number} is not a valid journal entry: {error!r}"
+            ) from error
     return entries
 
 
-def load_verifications(journal_dir: Path | str = DEFAULT_JOURNAL_DIR) -> list[Verification]:
+def load_verifications(
+    journal_dir: Path | str = DEFAULT_JOURNAL_DIR,
+) -> list[Verification]:
     path = verifications_path(journal_dir)
     verifications: list[Verification] = []
     for number, line in _numbered_lines(path):
         try:
             verifications.append(Verification.from_dict(json.loads(line)))
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
-            raise ValueError(f"{path}:{number} is not a valid verification: {error!r}") from error
+            raise ValueError(
+                f"{path}:{number} is not a valid verification: {error!r}"
+            ) from error
     return verifications
 
 
@@ -541,7 +573,9 @@ def record_verification(
     return path
 
 
-def latest_status(journal_dir: Path | str = DEFAULT_JOURNAL_DIR) -> dict[str, Verification]:
+def latest_status(
+    journal_dir: Path | str = DEFAULT_JOURNAL_DIR,
+) -> dict[str, Verification]:
     """The most recent verification per run id."""
     latest: dict[str, Verification] = {}
     for verification in load_verifications(journal_dir):
@@ -553,7 +587,9 @@ def _numbered_lines(path: Path):
     """`(line_number, text)` for every non-empty line of a JSONL file, if it exists."""
     if not path.is_file():
         return
-    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+    for number, line in enumerate(
+        path.read_text(encoding="utf-8").splitlines(), start=1
+    ):
         if line.strip():
             yield number, line
 
@@ -634,7 +670,9 @@ def verify(
     trades_checked = False
     if journal_dir is not None and entry.trades_file:
         trades_checked = True
-        mismatches.extend(verify_trades_file(entry, Path(journal_dir), result, tolerance))
+        mismatches.extend(
+            verify_trades_file(entry, Path(journal_dir), result, tolerance)
+        )
 
     if mismatches:
         status = STATUS_MISMATCH
@@ -676,13 +714,21 @@ def verify_trades_file(
     """
     path = journal_dir / TRADES_DIR / str(entry.trades_file)
     if not path.is_file():
-        return [{"field": "trades_file", "recorded": entry.trades_file, "actual": "missing"}]
+        return [
+            {"field": "trades_file", "recorded": entry.trades_file, "actual": "missing"}
+        ]
 
     with path.open(encoding="utf-8", newline="") as handle:
         rows = list(csv.DictReader(handle))
 
     if len(rows) != len(result.trades):
-        return [{"field": "trades.rows", "recorded": len(rows), "actual": len(result.trades)}]
+        return [
+            {
+                "field": "trades.rows",
+                "recorded": len(rows),
+                "actual": len(result.trades),
+            }
+        ]
 
     price_tolerance = 1e-8
     return_tolerance = 1e-6
@@ -697,7 +743,13 @@ def verify_trades_file(
         }
         for field, want in expected.items():
             if row.get(field) != want:
-                found.append({"field": f"trades[{index}].{field}", "recorded": row.get(field), "actual": want})
+                found.append(
+                    {
+                        "field": f"trades[{index}].{field}",
+                        "recorded": row.get(field),
+                        "actual": want,
+                    }
+                )
         for field, want, relative in (
             ("entry_price", trade.entry_price, price_tolerance),
             ("exit_price", trade.exit_price or 0.0, price_tolerance),
@@ -707,13 +759,35 @@ def verify_trades_file(
             try:
                 got = float(row[field])
             except (KeyError, TypeError, ValueError):
-                found.append({"field": f"trades[{index}].{field}", "recorded": row.get(field), "actual": want})
+                found.append(
+                    {
+                        "field": f"trades[{index}].{field}",
+                        "recorded": row.get(field),
+                        "actual": want,
+                    }
+                )
                 continue
-            allowed = abs(want) * relative if relative == price_tolerance else return_tolerance
+            allowed = (
+                abs(want) * relative
+                if relative == price_tolerance
+                else return_tolerance
+            )
             if abs(got - want) > allowed:
-                found.append({"field": f"trades[{index}].{field}", "recorded": got, "actual": want})
+                found.append(
+                    {
+                        "field": f"trades[{index}].{field}",
+                        "recorded": got,
+                        "actual": want,
+                    }
+                )
         if len(found) >= 5:  # enough to see what happened; the rest is noise
-            found.append({"field": "trades", "recorded": f"{index + 1} rows checked", "actual": "more…"})
+            found.append(
+                {
+                    "field": "trades",
+                    "recorded": f"{index + 1} rows checked",
+                    "actual": "more…",
+                }
+            )
             break
     return found
 
@@ -730,7 +804,13 @@ def compare(
     for key in sorted(set(expected) | set(actual)):
         location = f"{path}.{key}" if path else key
         if key not in expected or key not in actual:
-            found.append({"field": location, "recorded": expected.get(key), "actual": actual.get(key)})
+            found.append(
+                {
+                    "field": location,
+                    "recorded": expected.get(key),
+                    "actual": actual.get(key),
+                }
+            )
             continue
         want, got = expected[key], actual[key]
         if isinstance(want, dict) and isinstance(got, dict):
@@ -778,14 +858,18 @@ def report_lines(
     return lines
 
 
-def summary_lines(entries: list[RunEntry], statuses: dict[str, Verification] | None = None) -> list[str]:
+def summary_lines(
+    entries: list[RunEntry], statuses: dict[str, Verification] | None = None
+) -> list[str]:
     """Per-strategy roll-up: how each strategy has done across recorded runs."""
     statuses = statuses or {}
     grouped: dict[tuple[str, str], list[RunEntry]] = {}
     for entry in entries:
         grouped.setdefault((entry.strategy, entry.params_text), []).append(entry)
 
-    lines = [f"{'strategy':<34}{'runs':>5}{'last total':>13}{'best':>11}{'worst':>11}{'verified':>10}"]
+    lines = [
+        f"{'strategy':<34}{'runs':>5}{'last total':>13}{'best':>11}{'worst':>11}{'verified':>10}"
+    ]
     lines.append("-" * len(lines[0]))
     for (name, params), group in sorted(grouped.items()):
         latest = max(group, key=lambda item: item.recorded_at)
@@ -808,8 +892,9 @@ def show_lines(entry: RunEntry) -> list[str]:
         f"recorded     : {entry.recorded_at}",
         f"strategy     : {entry.strategy}({entry.params_text})",
         f"data         : {entry.data.symbol} {entry.data.timeframe}, {entry.data.bars:,} bars, "
-        f"digest {entry.data.digest[:16]}…" if entry.data else
-        f"data         : basket of {len(entry.legs)} legs, {entry.bars:,} bars, "
+        f"digest {entry.data.digest[:16]}…"
+        if entry.data
+        else f"data         : basket of {len(entry.legs)} legs, {entry.bars:,} bars, "
         f"{next(iter(entry.legs.values())).timeframe}",
         f"costs        : fee {entry.costs['fee_per_side']:.4%}/side, "
         f"slippage {entry.costs['slippage_per_side']:.4%}/side",
@@ -819,7 +904,9 @@ def show_lines(entry: RunEntry) -> list[str]:
     if entry.trades_file:
         lines.append(f"trades file  : {entry.trades_file}")
     lines.append("")
-    lines.append(json.dumps(payload["metrics"], indent=2, ensure_ascii=False, sort_keys=True))
+    lines.append(
+        json.dumps(payload["metrics"], indent=2, ensure_ascii=False, sort_keys=True)
+    )
     return lines
 
 
@@ -847,27 +934,41 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     report = sub.add_parser("report", help="table of recorded runs and their checks")
     report.add_argument("--last", type=int, default=None, help="only the newest N runs")
-    report.add_argument("--no-summary", action="store_true", help="skip the per-strategy roll-up")
+    report.add_argument(
+        "--no-summary", action="store_true", help="skip the per-strategy roll-up"
+    )
 
     verify = sub.add_parser("verify", help="re-run entries and compare every metric")
-    verify.add_argument("--id", default=None, help="verify one run id (prefix is enough)")
-    verify.add_argument("--last", type=int, default=None, help="verify the newest N runs")
-    verify.add_argument("--no-record", action="store_true", help="do not append to verifications.jsonl")
-    verify.add_argument("--quiet", action="store_true", help="only failures and the exit code")
+    verify.add_argument(
+        "--id", default=None, help="verify one run id (prefix is enough)"
+    )
+    verify.add_argument(
+        "--last", type=int, default=None, help="verify the newest N runs"
+    )
+    verify.add_argument(
+        "--no-record", action="store_true", help="do not append to verifications.jsonl"
+    )
+    verify.add_argument(
+        "--quiet", action="store_true", help="only failures and the exit code"
+    )
 
     show = sub.add_parser("show", help="print one entry in full")
     show.add_argument("--id", required=True)
     return parser.parse_args(argv)
 
 
-def select(entries: list[RunEntry], *, run_id: str | None = None, last: int | None = None) -> list[RunEntry]:
+def select(
+    entries: list[RunEntry], *, run_id: str | None = None, last: int | None = None
+) -> list[RunEntry]:
     selected = sorted(entries, key=lambda item: item.recorded_at)
     if run_id:
         matches = [item for item in selected if item.run_id.startswith(run_id)]
         if not matches:
             raise SystemExit(f"no run id starts with {run_id!r}")
         if len(matches) > 1:
-            raise SystemExit(f"{run_id!r} matches {len(matches)} runs; use a longer prefix")
+            raise SystemExit(
+                f"{run_id!r} matches {len(matches)} runs; use a longer prefix"
+            )
         return matches
     if last is not None:
         return selected[-last:]
@@ -910,7 +1011,9 @@ def main(argv: list[str] | None = None) -> int:
         failed = not verification.ok
         failures += int(failed)
         if failed or not args.quiet:
-            print(f"{STATUS_MARK.get(verification.status, '?'):>5} {entry.run_id}: {verification.message}")
+            print(
+                f"{STATUS_MARK.get(verification.status, '?'):>5} {entry.run_id}: {verification.message}"
+            )
             for mismatch in verification.mismatches[:10]:
                 print(
                     f"        {mismatch['field']}: recorded {mismatch['recorded']!r} "

@@ -30,7 +30,7 @@ def test_every_strategy_without_the_ls_suffix_is_long_only():
         try:
             targets = get_strategy(name).targets(bars)
         except TypeError:
-            continue                     # a factory that needs explicit parameters
+            continue  # a factory that needs explicit parameters
         if min(targets, default=0.0) < 0:
             offenders.append(name)
     assert offenders == [], f"these strategies short and are not named -ls: {offenders}"
@@ -47,7 +47,7 @@ def test_the_engine_refuses_a_short_when_it_is_told_this_is_spot():
     targets = get_strategy("sma-ls", window=20).targets(bars)
     run = engine.run_backtest
     result = run(bars, targets, "1h", engine.Costs(0))
-    assert result.performance.final_equity != 1.0        # it runs, and it does go short
+    assert result.performance.final_equity != 1.0  # it runs, and it does go short
     with pytest.raises(ValueError, match="spot account"):
         run(bars, targets, "1h", engine.Costs(0), spot_only=True)
 
@@ -55,7 +55,9 @@ def test_the_engine_refuses_a_short_when_it_is_told_this_is_spot():
 def test_a_long_only_strategy_is_unaffected_by_the_guard():
     bars = _both_ways()
     targets = get_strategy("sma", window=20).targets(bars)
-    with_guard = engine.run_backtest(bars, targets, "1h", engine.Costs(0), spot_only=True)
+    with_guard = engine.run_backtest(
+        bars, targets, "1h", engine.Costs(0), spot_only=True
+    )
     without = engine.run_backtest(bars, targets, "1h", engine.Costs(0))
     assert with_guard.performance.final_equity == pytest.approx(
         without.performance.final_equity
@@ -68,8 +70,17 @@ def test_the_backtest_cli_refuses_a_short_and_says_how_to_override(tmp_path, cap
     root = tmp_path / "spot"
     write_archive(root, "LONG-USDT", "1h", _both_ways())
     argv = [
-        "--data-dir", str(root), "--symbol", "LONG-USDT", "--timeframe", "1h",
-        "--strategy", "sma-ls", "--param", "window=20", "--no-artifacts",
+        "--data-dir",
+        str(root),
+        "--symbol",
+        "LONG-USDT",
+        "--timeframe",
+        "1h",
+        "--strategy",
+        "sma-ls",
+        "--param",
+        "window=20",
+        "--no-artifacts",
     ]
     with pytest.raises(SystemExit) as refused:
         backtest_main(argv)
@@ -85,9 +96,17 @@ def test_the_basket_cli_refuses_a_short_leg(tmp_path, capsys):
     write_archive(root, "LONG-USDT", "1h", _both_ways())
     write_archive(root, "OTHER-USDT", "1h", _both_ways())
     argv = [
-        "--data-dir", str(root), "--timeframe", "1h",
-        "--symbols", "LONG-USDT,OTHER-USDT", "--strategy", "sma-ls",
-        "--param", "window=20", "--no-artifacts",
+        "--data-dir",
+        str(root),
+        "--timeframe",
+        "1h",
+        "--symbols",
+        "LONG-USDT,OTHER-USDT",
+        "--strategy",
+        "sma-ls",
+        "--param",
+        "window=20",
+        "--no-artifacts",
     ]
     with pytest.raises(SystemExit) as refused:
         basket.main(argv)

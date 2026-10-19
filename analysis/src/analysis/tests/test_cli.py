@@ -59,7 +59,9 @@ class ThirdPartyBreakout(Strategy):
         return out
 
     def describe(self) -> str:
-        return f"long on a new {self.lookback}-bar high, out after {self.exit_bars} bars"
+        return (
+            f"long on a new {self.lookback}-bar high, out after {self.exit_bars} bars"
+        )
 
 
 @pytest.fixture
@@ -80,7 +82,9 @@ def test_list_shows_registered_strategies_with_their_parameters(capsys):
     assert "series" in printed
 
 
-def test_an_external_strategy_runs_without_touching_the_cli(toy_archive: Path, breakout_registered, capsys):
+def test_an_external_strategy_runs_without_touching_the_cli(
+    toy_archive: Path, breakout_registered, capsys
+):
     code = main(
         [
             "--strategy",
@@ -130,7 +134,17 @@ def test_parameters_change_the_result(toy_archive: Path, breakout_registered, ca
 def test_an_unknown_parameter_is_rejected_with_the_accepted_ones_listed(tmp_path: Path):
     # The data directory does not even exist: flags must be validated first.
     with pytest.raises(SystemExit) as caught:
-        main(["--strategy", "sma", "--param", "lookback=50", "--data-dir", str(tmp_path), "--no-artifacts"])
+        main(
+            [
+                "--strategy",
+                "sma",
+                "--param",
+                "lookback=50",
+                "--data-dir",
+                str(tmp_path),
+                "--no-artifacts",
+            ]
+        )
     message = str(caught.value)
     assert "has no parameter 'lookback'" in message
     assert "window (default 200)" in message
@@ -138,7 +152,17 @@ def test_an_unknown_parameter_is_rejected_with_the_accepted_ones_listed(tmp_path
 
 def test_a_parameter_without_a_value_is_rejected(toy_archive: Path):
     with pytest.raises(SystemExit, match="NAME=VALUE"):
-        main(["--strategy", "sma", "--param", "window", "--data-dir", str(toy_archive), "--no-artifacts"])
+        main(
+            [
+                "--strategy",
+                "sma",
+                "--param",
+                "window",
+                "--data-dir",
+                str(toy_archive),
+                "--no-artifacts",
+            ]
+        )
 
 
 def test_bare_sweep_uses_the_declared_parameter(toy_archive: Path, capsys):
@@ -165,7 +189,9 @@ def test_bare_sweep_uses_the_declared_parameter(toy_archive: Path, capsys):
         assert f"  {value:>8}" in printed or f"        {value}" in printed
 
 
-def test_a_named_sweep_works_for_any_parameter(toy_archive: Path, breakout_registered, capsys):
+def test_a_named_sweep_works_for_any_parameter(
+    toy_archive: Path, breakout_registered, capsys
+):
     code = main(
         [
             "--strategy",
@@ -187,7 +213,17 @@ def test_a_named_sweep_works_for_any_parameter(toy_archive: Path, breakout_regis
 
 def test_sweeping_an_unknown_parameter_is_rejected(toy_archive: Path):
     with pytest.raises(SystemExit, match="has no parameter"):
-        main(["--strategy", "sma", "--sweep", "lookback=3,5", "--data-dir", str(toy_archive), "--no-artifacts"])
+        main(
+            [
+                "--strategy",
+                "sma",
+                "--sweep",
+                "lookback=3,5",
+                "--data-dir",
+                str(toy_archive),
+                "--no-artifacts",
+            ]
+        )
 
 
 def test_artifacts_are_written_where_asked(toy_archive: Path, tmp_path: Path, capsys):
@@ -221,7 +257,6 @@ def test_artifacts_are_written_where_asked(toy_archive: Path, tmp_path: Path, ca
 
 
 def test_json_curves_are_optional(toy_archive: Path, tmp_path: Path):
-    import json
 
     out = tmp_path / "out"
     main(
@@ -253,7 +288,9 @@ def test_the_default_run_is_the_documented_one():
 
 def test_a_symbol_without_data_fails_loudly(toy_archive: Path):
     with pytest.raises(FileNotFoundError, match="backfill"):
-        main(["--symbol", "NOPE-USDT", "--data-dir", str(toy_archive), "--no-artifacts"])
+        main(
+            ["--symbol", "NOPE-USDT", "--data-dir", str(toy_archive), "--no-artifacts"]
+        )
 
 
 def test_the_toy_archive_is_readable(toy_archive: Path):
@@ -267,7 +304,9 @@ def test_the_toy_archive_is_readable(toy_archive: Path):
 # --- journaling from the CLI ------------------------------------------------
 
 
-def test_journal_flag_records_a_verifiable_entry(toy_archive: Path, tmp_path: Path, capsys):
+def test_journal_flag_records_a_verifiable_entry(
+    toy_archive: Path, tmp_path: Path, capsys
+):
     journal_dir = tmp_path / "journal"
     code = main(
         [
@@ -305,7 +344,9 @@ def test_journal_flag_records_a_verifiable_entry(toy_archive: Path, tmp_path: Pa
     assert verification.ok, verification.message
 
 
-def test_journal_flag_defaults_to_the_repository_directory(toy_archive: Path, tmp_path: Path, monkeypatch, capsys):
+def test_journal_flag_defaults_to_the_repository_directory(
+    toy_archive: Path, tmp_path: Path, monkeypatch, capsys
+):
     """`--journal` with no value means <repo>/journal, not the current directory.
 
     The default location is redirected here so the test never writes into the
@@ -337,7 +378,9 @@ def test_journal_flag_defaults_to_the_repository_directory(toy_archive: Path, tm
     assert journal.journal_dir_for("elsewhere") == Path("elsewhere")
 
 
-def test_keep_trades_copies_the_trade_table_into_the_journal(toy_archive: Path, tmp_path: Path, capsys):
+def test_keep_trades_copies_the_trade_table_into_the_journal(
+    toy_archive: Path, tmp_path: Path, capsys
+):
     journal_dir = tmp_path / "journal"
     main(
         [
@@ -364,7 +407,7 @@ def test_keep_trades_copies_the_trade_table_into_the_journal(toy_archive: Path, 
     assert stored.is_file()
     assert stored.read_text().startswith("side,entry_time_utc")
     # The copy is the one the run produced, byte for byte.
-    produced = tmp_path / "out" / f"sma5_TOY-USDT_1h_trades.csv"
+    produced = tmp_path / "out" / "sma5_TOY-USDT_1h_trades.csv"
     assert stored.read_bytes() == produced.read_bytes()
 
 
@@ -382,15 +425,27 @@ def test_journal_without_artifacts_is_refused(toy_archive: Path, capsys):
     assert code == 2
     assert "needs the trade table" in capsys.readouterr().err
 
+
 # --- --last: read the recent stretch, without truncating the inputs -----------
 
 
 def test_last_prints_the_window_and_measures_only_it(toy_archive: Path, capsys):
     code = main(
         [
-            "--data-dir", str(toy_archive), "--symbol", "TOY-USDT", "--timeframe", "1h",
-            "--strategy", "sma", "--param", "window=10", "--last", "5d",
-            "--no-artifacts", "--no-fee-grid",
+            "--data-dir",
+            str(toy_archive),
+            "--symbol",
+            "TOY-USDT",
+            "--timeframe",
+            "1h",
+            "--strategy",
+            "sma",
+            "--param",
+            "window=10",
+            "--last",
+            "5d",
+            "--no-artifacts",
+            "--no-fee-grid",
         ]
     )
     printed = capsys.readouterr().out
@@ -402,8 +457,20 @@ def test_last_prints_the_window_and_measures_only_it(toy_archive: Path, capsys):
 
 def test_a_window_is_the_tail_of_the_full_run(toy_archive: Path, capsys):
     """The windowed report must agree with the end of the full report."""
-    common = ["--data-dir", str(toy_archive), "--symbol", "TOY-USDT", "--timeframe", "1h",
-              "--strategy", "sma", "--param", "window=10", "--no-artifacts", "--no-fee-grid"]
+    common = [
+        "--data-dir",
+        str(toy_archive),
+        "--symbol",
+        "TOY-USDT",
+        "--timeframe",
+        "1h",
+        "--strategy",
+        "sma",
+        "--param",
+        "window=10",
+        "--no-artifacts",
+        "--no-fee-grid",
+    ]
     main([*common, "--last", "5d"])
     windowed = capsys.readouterr().out
     main(common)
@@ -418,8 +485,16 @@ def test_a_window_is_the_tail_of_the_full_run(toy_archive: Path, capsys):
 def test_a_window_longer_than_the_data_says_so(toy_archive: Path, capsys):
     code = main(
         [
-            "--data-dir", str(toy_archive), "--symbol", "TOY-USDT", "--timeframe", "1h",
-            "--no-artifacts", "--no-fee-grid", "--last", "40y",
+            "--data-dir",
+            str(toy_archive),
+            "--symbol",
+            "TOY-USDT",
+            "--timeframe",
+            "1h",
+            "--no-artifacts",
+            "--no-fee-grid",
+            "--last",
+            "40y",
         ]
     )
     assert code == 0
@@ -429,7 +504,15 @@ def test_a_window_longer_than_the_data_says_so(toy_archive: Path, capsys):
 def test_a_window_too_short_to_measure_is_rejected(toy_archive: Path, capsys):
     with pytest.raises(SystemExit, match="give a longer period"):
         main(
-            ["--data-dir", str(toy_archive), "--symbol", "TOY-USDT", "--last", "1h", "--no-artifacts"]
+            [
+                "--data-dir",
+                str(toy_archive),
+                "--symbol",
+                "TOY-USDT",
+                "--last",
+                "1h",
+                "--no-artifacts",
+            ]
         )
 
 
@@ -438,8 +521,14 @@ def test_a_window_cannot_be_journalled(toy_archive: Path, tmp_path: Path, capsys
     with pytest.raises(SystemExit, match="window is a view"):
         main(
             [
-                "--data-dir", str(toy_archive), "--symbol", "TOY-USDT", "--last", "5d",
-                "--journal", str(tmp_path / "journal"),
+                "--data-dir",
+                str(toy_archive),
+                "--symbol",
+                "TOY-USDT",
+                "--last",
+                "5d",
+                "--journal",
+                str(tmp_path / "journal"),
             ]
         )
 
@@ -447,15 +536,35 @@ def test_a_window_cannot_be_journalled(toy_archive: Path, tmp_path: Path, capsys
 def test_a_nonsense_period_is_rejected(toy_archive: Path):
     with pytest.raises(SystemExit, match="cannot read"):
         main(
-            ["--data-dir", str(toy_archive), "--symbol", "TOY-USDT", "--last", "soon", "--no-artifacts"]
+            [
+                "--data-dir",
+                str(toy_archive),
+                "--symbol",
+                "TOY-USDT",
+                "--last",
+                "soon",
+                "--no-artifacts",
+            ]
         )
 
 
 def test_a_windowed_run_writes_its_own_artifacts(toy_archive: Path, tmp_path: Path):
     """One row per bar of the window, and a name that cannot clobber the full run."""
     out = tmp_path / "out"
-    common = ["--data-dir", str(toy_archive), "--symbol", "TOY-USDT", "--timeframe", "1h",
-              "--strategy", "sma", "--param", "window=10", "--out-dir", str(out)]
+    common = [
+        "--data-dir",
+        str(toy_archive),
+        "--symbol",
+        "TOY-USDT",
+        "--timeframe",
+        "1h",
+        "--strategy",
+        "sma",
+        "--param",
+        "window=10",
+        "--out-dir",
+        str(out),
+    ]
     assert main(common) == 0
     assert main([*common, "--last", "5d"]) == 0
 
@@ -466,10 +575,16 @@ def test_a_windowed_run_writes_its_own_artifacts(toy_archive: Path, tmp_path: Pa
 
     import csv as csv_module
 
-    rows = list(csv_module.DictReader((out / "sma10_TOY-USDT_1h_last5d_equity.csv").open()))
-    assert len(rows) == 121  # five days of hourly bars, both ends included, and nothing else
+    rows = list(
+        csv_module.DictReader((out / "sma10_TOY-USDT_1h_last5d_equity.csv").open())
+    )
+    assert (
+        len(rows) == 121
+    )  # five days of hourly bars, both ends included, and nothing else
     assert float(rows[0]["equity"]) == 1.0
-    trades = list(csv_module.DictReader((out / "sma10_TOY-USDT_1h_last5d_trades.csv").open()))
+    trades = list(
+        csv_module.DictReader((out / "sma10_TOY-USDT_1h_last5d_trades.csv").open())
+    )
     assert all(row["entry_time_utc"] >= rows[0]["time_utc"] for row in trades)
 
 
@@ -496,12 +611,24 @@ def run_backtest_module():
     return module
 
 
-def test_the_overlay_is_named_in_the_report_and_the_artifacts(toy_archive: Path, tmp_path: Path, capsys):
+def test_the_overlay_is_named_in_the_report_and_the_artifacts(
+    toy_archive: Path, tmp_path: Path, capsys
+):
     """A run with the overlay must be tellable apart from the same run without it."""
     scaled = tmp_path / "scaled"
     plain = tmp_path / "plain"
-    common = ["--data-dir", str(toy_archive), "--symbol", "TOY-USDT", "--timeframe", "1h",
-              "--strategy", "sma", "--param", "window=10"]
+    common = [
+        "--data-dir",
+        str(toy_archive),
+        "--symbol",
+        "TOY-USDT",
+        "--timeframe",
+        "1h",
+        "--strategy",
+        "sma",
+        "--param",
+        "window=10",
+    ]
     assert main([*common, "--out-dir", str(scaled), "--dd-scale", "10,40,25"]) == 0
     printed = capsys.readouterr().out
     assert "drawdown overlay" in printed

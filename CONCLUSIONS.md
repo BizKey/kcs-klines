@@ -518,22 +518,27 @@ they disagree in an informative way.
 
 **A per-pair spread, estimated from the bars.** `kcs-basket --spread-model corwin-schultz`
 reads each pair's own high-low ranges (Corwin-Schultz 2012, on **hourly** bars — a daily range
-is mostly volatility, not spread: the same estimator reads BTC at 30 bp on daily bars and
-5.6 bp on hourly ones) and charges each leg half of it per side on top of the fee. On the
-winning configuration over the last five years:
+is mostly volatility, not spread: the same estimator reads BTC at 92 bp on daily bars and
+22 bp on hourly ones) and charges each leg half of it per side on top of the fee. On the
+winning configuration, on the pinned window 2021-10-02 → 2026-10-01 (measured 2026-10-19):
 
 | pair | estimated spread | total per side | | pair | estimated spread | total per side |
 |---|---|---|---|---|---|---|
-| DOT-USDT | 28.2 bp | 24.1 bp | | BNB-USDT | 9.9 bp | 14.9 bp |
-| ADA-USDT | 22.3 bp | 21.1 bp | | VET-USDT | 9.4 bp | 14.7 bp |
-| XRP-USDT | 18.0 bp | 19.0 bp | | BTC-USDT | 5.6 bp | 12.8 bp |
-| SOL-USDT | 17.5 bp | 18.8 bp | | MOVR-USDT | 0.0 bp | 10.0 bp (fallback) |
-| DOGE-USDT | 14.4 bp | 17.2 bp | | ETH-USDT | 12.3 bp | 16.2 bp |
+| DOT-USDT | 52.0 bp | 36.0 bp | | DOGE-USDT | 30.2 bp | 25.1 bp |
+| MOVR-USDT | 50.2 bp | 35.1 bp | | BNB-USDT | 29.8 bp | 24.9 bp |
+| SOL-USDT | 46.7 bp | 33.4 bp | | XRP-USDT | 29.4 bp | 24.7 bp |
+| VET-USDT | 39.8 bp | 29.9 bp | | BTC-USDT | 21.9 bp | 21.0 bp |
+| ADA-USDT | 33.3 bp | 26.6 bp | | ETH-USDT | 32.4 bp | 26.2 bp |
 
-The result moves from **+91.43% at Sharpe 0.87** to **+86.05% at 0.83** (drawdown −17.5% →
-−17.9%, commission 6.2% → 9.9% of capital). The estimator is biased *upward* on volatile pairs,
-so this is a conservative bound: the honest reading is "realistic spreads cost a few points,
-not the edge".
+The result moves from **+91.43% at Sharpe 0.87** to **+76.57% at 0.76** (drawdown −17.5% →
+−18.8%). **These estimates are not a constant of the pair: they track the hourly archive.** On
+the snapshot this table was first written from, BTC read 5.6 bp and DOT 28.2 bp, and the same
+command returned +86.05% at 0.83; a backfill of the hourly bars before the window moved every
+estimate up by roughly a factor of two and the total down by ten points. So read the estimator
+as a *conservative band* ("realistic spreads cost tens of basis points a side, not the edge")
+rather than as a calibration — and note that every other "with spreads" number in this file
+(§1.6b, §1.6c, §1.11, §1.11b) was measured against the earlier baseline, so their **deltas**
+are the durable part, not their absolute levels.
 
 **A flat fee sweep, five times the modelled commission.** If the cost assumption is simply
 wrong by a factor, this is what it costs:
@@ -563,6 +568,8 @@ with the coefficient left as a knob (the literature band is roughly 0.1-1) so th
 band rather than a point. `kcs-basket --capital 60000` charges it per leg, and warns when a
 single order is 10% or more of one bar's turnover — which is days of that pair's volume, not
 one trade. The winning configuration, §1.4-1.5a, over the last five years:
+
+*Baseline note: these rows were measured against the earlier spread estimate (the +86.05% line of §1.6a) and were not re-run after the hourly backfill that moved it to +76.57%. The **deltas** are what this table is for; the absolute levels are one snapshot old.*
 
 | cost assumption | total | Sharpe | max DD | commission, % of capital |
 |---|---|---|---|---|
@@ -602,7 +609,7 @@ after the window and picked up again if it comes back:
 
 | rule | total | Sharpe |
 |---|---|---|
-| keep everything | **+86.05%** | **0.83** |
+| keep everything | **+86.05%** † | **0.83** † |
 | drop a leg below $100k a day | +78.20% | 0.80 |
 | drop a leg below $300k a day | +68.95% | 0.73 |
 | drop a leg below $1M a day | +63.81% | 0.71 |
@@ -775,6 +782,8 @@ open**, which on a gap is worse than the level.
 **Inside the configuration this file recommends** (top ten by turnover, `voltarget-sma` 50 bars
 / 30% target, estimated spreads):
 
+*Baseline note: these rows were measured against the earlier spread estimate (the +86.05% line of §1.6a) and were not re-run after the hourly backfill that moved it to +76.57%. The **deltas** are what this table is for; the absolute levels are one snapshot old.*
+
 | exits added | total | Sharpe | max DD | commission |
 |---|---|---|---|---|
 | none (the recommended one) | **+86.05%** | **0.83** | −17.89% | 9.94% |
@@ -860,6 +869,8 @@ noise that the strategy's own signal knows nothing about. Exit on the wick and y
 dip, pay the round trip, and re-enter higher — which is what the equity curve shows.
 
 **The configuration this file recommends, with intrabar exits:**
+
+*Baseline note: these rows were measured against the earlier spread estimate (the +86.05% line of §1.6a) and were not re-run after the hourly backfill that moved it to +76.57%. The **deltas** are what this table is for; the absolute levels are one snapshot old.*
 
 | exits added | total | Sharpe | max DD | commission |
 |---|---|---|---|---|
@@ -1149,6 +1160,16 @@ and the volatility target in §6).
 ---
 
 ## 3. Corrections — mistakes this project made and fixed
+
+* **The spread estimates moved with the hourly archive (2026-10-19).** `--spread-model
+  corwin-schultz` reads each pair's hourly bars before the window, and a backfill of those bars
+  doubled the estimates (BTC 5.6 → 21.9 bp, DOT 28.2 → 52.0 bp). The recommended basket's
+  "with spreads" figure therefore went from **+86.05% at Sharpe 0.83 to +76.57% at 0.76** on the
+  same pinned window, and every table built on that baseline (§1.6b, §1.6c, §1.11, §1.11b) is
+  marked with a note: their deltas stand, their absolute levels are one snapshot old. The
+  fee-only figure — **+91.43% at 0.87** — reproduces to the basis point, which is why the
+  verification gate pins both claims to explicit dates now: `--last 5y` slid with every collector
+  run and re-dated the turnover selection, so growth alone could fail the check.
 
 * **A hand-rolled backtest needs calibrating against `engine.py` before it means
   anything.** The indicator screen was first written with the position applied one bar
@@ -1454,7 +1475,7 @@ treat any single multiple as noise until a walk-forward agrees with it.
 ## 8. Reproducing the headline numbers
 
 ```bash
-uv run pytest                          # 512 tests, ~45 s
+uv run pytest                          # 514 tests, ~60 s
 
 # one asset
 uv run kcs-backtest --symbol BTC-USDT --strategy tsmom \

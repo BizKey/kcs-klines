@@ -44,13 +44,17 @@ def test_a_very_high_ceiling_makes_it_transparent():
 def test_the_filter_can_only_take_exposure_away():
     bars = make_bars(wavy(300))
     inner = get_strategy("sma", window=20).targets(bars)
-    filtered = get_strategy("volfilter-sma", window=20, max_vol=0.6, vol_window=30).targets(bars)
+    filtered = get_strategy(
+        "volfilter-sma", window=20, max_vol=0.6, vol_window=30
+    ).targets(bars)
     assert all(0.0 <= f <= i for f, i in zip(filtered, inner))
 
 
 def test_it_never_shorts_and_survives_a_falling_market():
     bars = make_bars(ramp(200, start=200.0, step=-0.5))
-    targets = get_strategy("volfilter-sma", window=20, max_vol=0.8, vol_window=30).targets(bars)
+    targets = get_strategy(
+        "volfilter-sma", window=20, max_vol=0.8, vol_window=30
+    ).targets(bars)
     assert min(targets) >= 0.0
     assert not any(targets), "a downtrend below the mean should keep it out entirely"
 
@@ -60,8 +64,14 @@ def test_the_reading_never_uses_a_later_bar():
     strategy = VolFilter(Always(), max_vol=0.5, vol_window=20, min_observations=10)
     after = strategy.targets(bars)
     rewritten = [
-        type(bar)(time=bar.time, open=bar.open, high=bar.high * 5, low=bar.low,
-                  close=bar.close * 5, volume=bar.volume)
+        type(bar)(
+            time=bar.time,
+            open=bar.open,
+            high=bar.high * 5,
+            low=bar.low,
+            close=bar.close * 5,
+            volume=bar.volume,
+        )
         for bar in bars[80:]
     ]
     before = strategy.targets(bars[:80] + rewritten)

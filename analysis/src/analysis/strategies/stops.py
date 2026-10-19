@@ -47,7 +47,9 @@ class StopsStrategy(Strategy):
         cooldown: int = 0,
     ):
         if min(take_profit, stop_loss, trail) < 0:
-            raise ValueError("take_profit, stop_loss and trail are fractions, not negatives")
+            raise ValueError(
+                "take_profit, stop_loss and trail are fractions, not negatives"
+            )
         if cooldown < 0:
             raise ValueError("cooldown counts bars and cannot be negative")
         self.inner = inner
@@ -78,8 +80,10 @@ class StopsStrategy(Strategy):
     def params(self) -> dict:
         payload = dict(self.inner.params)
         payload.update(
-            take_profit=self.take_profit, stop_loss=self.stop_loss,
-            trail=self.trail, cooldown=self.cooldown,
+            take_profit=self.take_profit,
+            stop_loss=self.stop_loss,
+            trail=self.trail,
+            cooldown=self.cooldown,
         )
         return payload
 
@@ -93,10 +97,16 @@ class StopsStrategy(Strategy):
             exits.append(f"trail {self.trail:.0%} off the best close")
         if not exits:
             exits.append("no exits of its own")
-        cooldown = f", {self.cooldown} bars of cooldown after an exit" if self.cooldown else ""
-        return f"{self.inner.describe()}; exits: {', '.join(exits)}{cooldown} (on closes)"
+        cooldown = (
+            f", {self.cooldown} bars of cooldown after an exit" if self.cooldown else ""
+        )
+        return (
+            f"{self.inner.describe()}; exits: {', '.join(exits)}{cooldown} (on closes)"
+        )
 
-    def _level_hit(self, bar: Bar, long: bool, reference: float, best: float) -> float | None:
+    def _level_hit(
+        self, bar: Bar, long: bool, reference: float, best: float
+    ) -> float | None:
         """The price a level was touched at inside this bar, or `None`."""
         if not reference:
             return None
@@ -104,11 +114,11 @@ class StopsStrategy(Strategy):
             if self.stop_loss:
                 level = reference * (1.0 - self.stop_loss)
                 if bar.low <= level:
-                    return min(level, bar.open)          # a gap through the stop is worse
+                    return min(level, bar.open)  # a gap through the stop is worse
             if self.take_profit:
                 level = reference * (1.0 + self.take_profit)
                 if bar.high >= level:
-                    return level                          # a favourable gap is not booked
+                    return level  # a favourable gap is not booked
             if self.trail and best:
                 level = best * (1.0 - self.trail)
                 if bar.low <= level:
@@ -158,9 +168,9 @@ class StopsStrategy(Strategy):
         wanted = self.inner.targets(bars)
         out: list[float] = []
         exits: list[float | None] = [None] * len(bars)
-        position = 0.0            # the sign this wrapper is actually holding
-        reference = 0.0           # the close the position was opened at
-        best = 0.0                # best close since it was opened, for the trailing exit
+        position = 0.0  # the sign this wrapper is actually holding
+        reference = 0.0  # the close the position was opened at
+        best = 0.0  # best close since it was opened, for the trailing exit
         blocked_until = -1
         for index, (bar, want) in enumerate(zip(bars, wanted)):
             if position == 0.0:
@@ -192,7 +202,7 @@ class StopsStrategy(Strategy):
                 position = 0.0
                 out.append(0.0)
                 continue
-            if (want > 0) != long:                      # the inner rule flipped: a new entry
+            if (want > 0) != long:  # the inner rule flipped: a new entry
                 position = 1.0 if want > 0 else -1.0
                 reference = best = bar.close
                 out.append(want)
@@ -201,7 +211,11 @@ class StopsStrategy(Strategy):
             moved = (bar.close / reference - 1.0) if reference else 0.0
             if not long:
                 moved = -moved
-            pullback = (bar.close / best - 1.0) if long and best else (1.0 - bar.close / best if best else 0.0)
+            pullback = (
+                (bar.close / best - 1.0)
+                if long and best
+                else (1.0 - bar.close / best if best else 0.0)
+            )
             hit = False
             if self.stop_loss and moved <= -self.stop_loss:
                 hit = True
@@ -260,10 +274,15 @@ def _voltarget_stops_sma(
 
     return ScaledStrategy(
         StopsStrategy(
-            SmaTrend(window=window), take_profit=take_profit, stop_loss=stop_loss,
-            trail=trail, cooldown=cooldown,
+            SmaTrend(window=window),
+            take_profit=take_profit,
+            stop_loss=stop_loss,
+            trail=trail,
+            cooldown=cooldown,
         ),
-        target_vol, vol_window, cap,
+        target_vol,
+        vol_window,
+        cap,
     )
 
 
@@ -286,5 +305,8 @@ def _stops_breakout(
 
     return StopsStrategy(
         DonchianBreakout(entry=entry, exit_window=exit_window, min_hold=min_hold),
-        take_profit=take_profit, stop_loss=stop_loss, trail=trail, cooldown=cooldown,
+        take_profit=take_profit,
+        stop_loss=stop_loss,
+        trail=trail,
+        cooldown=cooldown,
     )

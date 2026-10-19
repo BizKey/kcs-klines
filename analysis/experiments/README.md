@@ -66,6 +66,17 @@ hidden: the checker still runs them and still prints the diff, but they do not f
   `kcs-riskparity` re-selects its top five names every rebalance, so the newest week of the
   archive changes which names qualify and a five-name book moves by tens of points.
 
+### Resolved by pinning the window (2026-10-19)
+
+The two basket claims used `--last 5y`, which slides with the newest bar: every collector run
+moved the window *and* re-dated the turnover selection (MOVR dropped out, AVAX came in), so the
+check failed on growth alone. They now pin `--from 2021-10-02 --to 2026-10-01`, and the
+fee-only claim reproduces to the basis point. The spread-model claim also had to be re-stated:
+its per-leg estimates are read from the **hourly** archive before the window, and a backfill
+there doubled them (BTC 5.6 → 21.9 bp, DOT 28.2 → 52.0 bp), taking the total from +86.05% to
++76.57%. Pin the window when a claim is about a stretch; expect a claim about *data* to move
+when the data does.
+
 ### Known churn-sensitive claim
 
 `riskparity-top5-trend` currently measures **+958%** where `§1.4` states **+868%**,

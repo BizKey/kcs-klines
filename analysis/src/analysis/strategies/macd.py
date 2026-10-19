@@ -67,7 +67,12 @@ class MacdTrend(Strategy):
 
     @property
     def params(self) -> dict:
-        return {"fast": self.fast, "slow": self.slow, "signal": self.signal, "mode": self.mode}
+        return {
+            "fast": self.fast,
+            "slow": self.slow,
+            "signal": self.signal,
+            "mode": self.mode,
+        }
 
     def targets(self, bars: list[Bar]) -> list[float]:
         macd_line, signal_line, _ = macd_lines(
@@ -91,7 +96,13 @@ class MacdTrend(Strategy):
 
 
 @register("macd")
-def _macd(fast: int = 12, slow: int = 26, signal: int = 9, mode: str = "long-only", **_: object) -> Strategy:
+def _macd(
+    fast: int = 12,
+    slow: int = 26,
+    signal: int = 9,
+    mode: str = "long-only",
+    **_: object,
+) -> Strategy:
     """Long while MACD is above its signal line, flat below."""
     return MacdTrend(fast=fast, slow=slow, signal=signal, mode=mode)
 

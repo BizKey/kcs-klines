@@ -125,7 +125,9 @@ def _breakout(
     **_: object,
 ) -> Strategy:
     """Long on a new N-bar high, out on a shorter low channel."""
-    return DonchianBreakout(entry=entry, exit_window=exit_window, min_hold=min_hold, mode=mode)
+    return DonchianBreakout(
+        entry=entry, exit_window=exit_window, min_hold=min_hold, mode=mode
+    )
 
 
 @register("breakout-ls")

@@ -88,7 +88,8 @@ def macd(
     ]
     signal_line = ema(macd_line, signal)
     histogram: list[float | None] = [
-        None if (m is None or s is None) else m - s for m, s in zip(macd_line, signal_line)
+        None if (m is None or s is None) else m - s
+        for m, s in zip(macd_line, signal_line)
     ]
     return macd_line, signal_line, histogram
 
@@ -210,7 +211,11 @@ def performance(
     if final_equity is not None:
         series[-1] = final_equity
 
-    returns = [series[i] / series[i - 1] - 1.0 for i in range(1, len(series)) if series[i - 1] > 0]
+    returns = [
+        series[i] / series[i - 1] - 1.0
+        for i in range(1, len(series))
+        if series[i - 1] > 0
+    ]
     if len(returns) < 2:
         vol = sharpe = 0.0
     else:

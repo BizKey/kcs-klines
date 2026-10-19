@@ -10,7 +10,7 @@ import pytest
 
 from .. import data, riskparity
 from ..engine import Costs
-from .conftest import STEP, make_bars, write_archive
+from .conftest import make_bars, write_archive
 
 DAY = 86400
 START = 1_507_161_600  # a Thursday, aligned to the daily grid
@@ -18,7 +18,9 @@ FREE = Costs(0)
 PAID = Costs(fee_per_side=0.001)
 
 
-def archive(tmp_path: Path, series: dict[str, list[float]], turnovers=None, name: str = "spot") -> Path:
+def archive(
+    tmp_path: Path, series: dict[str, list[float]], turnovers=None, name: str = "spot"
+) -> Path:
     """A daily archive with one file per symbol, closes given, turnover settable."""
     root = tmp_path / name
     for symbol, closes in series.items():
@@ -37,7 +39,9 @@ def aligned_for(root: Path, timeframe: str = "1d", calendar: str | None = None):
     calendar = calendar or symbols[0]
     times = riskparity.read_series(root, calendar, timeframe).times
     return {
-        symbol: riskparity.align(riskparity.read_series(root, symbol, timeframe), times, 3)
+        symbol: riskparity.align(
+            riskparity.read_series(root, symbol, timeframe), times, 3
+        )
         for symbol in symbols
     }, times
 
@@ -63,7 +67,13 @@ def run(root: Path, **kwargs):
 
 def test_equal_weights_without_a_budget_are_the_passive_book(tmp_path: Path):
     """Nothing distinguishes the two books, so the two curves must be identical."""
-    root = archive(tmp_path, {"AAA": [100 + i for i in range(60)], "BBB": [200 - i * 0.5 for i in range(60)]})
+    root = archive(
+        tmp_path,
+        {
+            "AAA": [100 + i for i in range(60)],
+            "BBB": [200 - i * 0.5 for i in range(60)],
+        },
+    )
     result = run(root, weight_scheme="equal", vol_budget=None)
     assert result.equity == pytest.approx(result.benchmark_equity)
     assert result.fees_paid == pytest.approx(result.benchmark_fees)
@@ -96,16 +106,25 @@ def test_the_universe_leaves_out_young_symbols(tmp_path: Path):
 
 def test_the_universe_is_chosen_from_past_data_only(tmp_path: Path):
     """Rewrite the future and yesterday's selection must not move."""
-    root = archive(tmp_path, {"AAA": [100.0] * 60, "BBB": [100.0] * 60}, turnovers={"AAA": [5.0] * 60, "BBB": [9.0] * 60})
+    root = archive(
+        tmp_path,
+        {"AAA": [100.0] * 60, "BBB": [100.0] * 60},
+        turnovers={"AAA": [5.0] * 60, "BBB": [9.0] * 60},
+    )
     before = run(root, top=1, rebalance=10)
     # make AAA the busiest name, but only *after* the last decision
     bars = make_bars([100.0] * 60, start=START, step=DAY)
     write_archive(root, "AAA", "1d", bars, turnovers=[5.0] * 55 + [1000.0] * 5)
     after = run(root, top=1, rebalance=10)
     early_before = [r.holdings for r in before.rebalances if r.index <= 50]
-    early_after = [r.holdings for r in after.rebalances if r.index <= 50 and r.index <= 50]
+    early_after = [
+        r.holdings for r in after.rebalances if r.index <= 50 and r.index <= 50
+    ]
     # the last decision at index 50 looks back 5 bars, all of them untouched
-    assert early_before == [r.holdings for r in after.rebalances if r.index <= 50][: len(early_before)]
+    assert (
+        early_before
+        == [r.holdings for r in after.rebalances if r.index <= 50][: len(early_before)]
+    )
 
 
 def test_the_busiest_symbol_comes_first(tmp_path: Path):
@@ -138,7 +157,10 @@ def test_inverse_volatility_gives_more_weight_to_the_calmer_symbol(tmp_path: Pat
 
 def test_weights_always_sum_to_one_and_leave_the_rest_in_cash(tmp_path: Path):
     # a zigzag keeps the book genuinely volatile, so a 5% budget has to bite
-    root = archive(tmp_path, {"AAA": [100.0 + 20 * (i % 2) for i in range(80)], "BBB": [100.0] * 80})
+    root = archive(
+        tmp_path,
+        {"AAA": [100.0 + 20 * (i % 2) for i in range(80)], "BBB": [100.0] * 80},
+    )
     result = run(root, top=2, vol_budget=0.05, rebalance=10)
     assert result.rebalances
     for rebalance in result.rebalances:
@@ -150,15 +172,29 @@ def test_weights_always_sum_to_one_and_leave_the_rest_in_cash(tmp_path: Path):
 
 def test_the_budget_never_levers_the_book_up(tmp_path: Path):
     """A calm book asks for more size than it has; the scale must stay at 1."""
-    root = archive(tmp_path, {"AAA": [100.0 * (1.0001**i) for i in range(120)], "BBB": [100.0] * 120})
+    root = archive(
+        tmp_path,
+        {"AAA": [100.0 * (1.0001**i) for i in range(120)], "BBB": [100.0] * 120},
+    )
     result = run(root, top=2, vol_budget=10.0, rebalance=10)
     assert result.rebalances
     assert all(rebalance.scale == pytest.approx(1.0) for rebalance in result.rebalances)
 
 
 def test_a_wild_book_is_scaled_down_further_than_a_calm_one(tmp_path: Path):
-    wild = archive(tmp_path, {"AAA": [100 * (1.4 if i % 2 else 0.7) ** (i // 2) for i in range(100)], "BBB": [100.0] * 100}, name="wild")
-    calm = archive(tmp_path, {"AAA": [100.0 + 0.01 * i for i in range(100)], "BBB": [100.0] * 100}, name="calm")
+    wild = archive(
+        tmp_path,
+        {
+            "AAA": [100 * (1.4 if i % 2 else 0.7) ** (i // 2) for i in range(100)],
+            "BBB": [100.0] * 100,
+        },
+        name="wild",
+    )
+    calm = archive(
+        tmp_path,
+        {"AAA": [100.0 + 0.01 * i for i in range(100)], "BBB": [100.0] * 100},
+        name="calm",
+    )
     wild_result = run(wild, top=2, vol_budget=0.4, rebalance=10)
     calm_result = run(calm, top=2, vol_budget=0.4, rebalance=10)
     assert wild_result.invested_mean < calm_result.invested_mean
@@ -168,7 +204,13 @@ def test_a_wild_book_is_scaled_down_further_than_a_calm_one(tmp_path: Path):
 
 
 def test_a_decision_lands_on_the_close_after_it_is_taken(tmp_path: Path):
-    root = archive(tmp_path, {"AAA": [100.0 + i for i in range(60)], "BBB": [100.0 + 2 * i for i in range(60)]})
+    root = archive(
+        tmp_path,
+        {
+            "AAA": [100.0 + i for i in range(60)],
+            "BBB": [100.0 + 2 * i for i in range(60)],
+        },
+    )
     result = run(root, top=2, rebalance=10)
     assert result.rebalances
     for rebalance in result.rebalances:
@@ -214,7 +256,9 @@ def test_an_empty_book_costs_nothing_and_says_so(tmp_path: Path):
 
 
 def test_the_summary_is_json_friendly(tmp_path: Path):
-    root = archive(tmp_path, {"AAA": [100.0 + i for i in range(60)], "BBB": [100.0] * 60})
+    root = archive(
+        tmp_path, {"AAA": [100.0 + i for i in range(60)], "BBB": [100.0] * 60}
+    )
     payload = run(root, vol_budget=0.4, rebalance=10).as_dict()
     assert payload["top"] == 2
     assert payload["weight_scheme"] == "equal"
@@ -226,7 +270,9 @@ def test_the_summary_is_json_friendly(tmp_path: Path):
 
 
 def test_the_report_names_the_selection_the_weights_and_the_budget(tmp_path: Path):
-    root = archive(tmp_path, {"AAA": [100.0 + i for i in range(60)], "BBB": [100.0] * 60})
+    root = archive(
+        tmp_path, {"AAA": [100.0 + i for i in range(60)], "BBB": [100.0] * 60}
+    )
     text = riskparity.render(run(root, vol_budget=0.4, top=1, rebalance=10))
     assert "top 1 of 2 symbols" in text
     assert "risk budget 40% a year" in text
@@ -235,7 +281,9 @@ def test_the_report_names_the_selection_the_weights_and_the_budget(tmp_path: Pat
 
 
 def test_the_artifact_name_says_which_book_it_was(tmp_path: Path):
-    root = archive(tmp_path, {"AAA": [100.0 + i for i in range(60)], "BBB": [100.0] * 60})
+    root = archive(
+        tmp_path, {"AAA": [100.0 + i for i in range(60)], "BBB": [100.0] * 60}
+    )
     equal = run(root, top=5, vol_budget=0.4)
     inverse = run(root, top=5, vol_budget=None, weight_scheme="invvol")
     assert riskparity.artifact_stem(equal) == "riskparity_eq5-b40_1d"
@@ -244,18 +292,32 @@ def test_the_artifact_name_says_which_book_it_was(tmp_path: Path):
 
 
 def test_the_artifacts_are_written(tmp_path: Path):
-    root = archive(tmp_path, {"AAA": [100.0 + i for i in range(60)], "BBB": [100.0] * 60})
+    root = archive(
+        tmp_path, {"AAA": [100.0 + i for i in range(60)], "BBB": [100.0] * 60}
+    )
     result = run(root, vol_budget=0.4, rebalance=10)
-    csv_path, svg_path, json_path = tmp_path / "c.csv", tmp_path / "c.svg", tmp_path / "c.json"
+    csv_path, svg_path, json_path = (
+        tmp_path / "c.csv",
+        tmp_path / "c.svg",
+        tmp_path / "c.json",
+    )
     riskparity.write_equity(csv_path, result)
     riskparity.write_chart(svg_path, result)
     riskparity.write_metrics(json_path, result)
     rows = list(csv.DictReader(csv_path.open()))
-    assert list(rows[0]) == ["time_utc", "portfolio", "equal_weight_hold", "rebalanced", "invested"]
+    assert list(rows[0]) == [
+        "time_utc",
+        "portfolio",
+        "equal_weight_hold",
+        "rebalanced",
+        "invested",
+    ]
     assert len(rows) == len(result.times)
     svg = svg_path.read_text()
     assert svg.startswith("<svg") and 'class="final-level"' in svg
-    assert json.loads(json_path.read_text())["achieved_vol"] == pytest.approx(result.achieved_vol)
+    assert json.loads(json_path.read_text())["achieved_vol"] == pytest.approx(
+        result.achieved_vol
+    )
 
 
 # --- validation ---------------------------------------------------------------
@@ -308,14 +370,35 @@ def test_alignment_forward_fills_a_price_until_it_goes_stale(tmp_path: Path):
 
 
 def test_cli_prints_a_book_and_writes_it(tmp_path: Path, capsys):
-    root = archive(tmp_path, {"AAA": [100.0 + i for i in range(80)], "BBB": [100.0] * 80}, name="spot")
+    root = archive(
+        tmp_path,
+        {"AAA": [100.0 + i for i in range(80)], "BBB": [100.0] * 80},
+        name="spot",
+    )
     out = tmp_path / "out"
     code = riskparity.main(
         [
-            "--data-dir", str(root), "--timeframe", "1d", "--top", "2",
-            "--min-history", "0d", "--lookback", "5d", "--rebalance", "10d",
-            "--vol-window", "5d", "--vol-budget", "0.4", "--calendar", "AAA",
-            "--out-dir", str(out), "--json",
+            "--data-dir",
+            str(root),
+            "--timeframe",
+            "1d",
+            "--top",
+            "2",
+            "--min-history",
+            "0d",
+            "--lookback",
+            "5d",
+            "--rebalance",
+            "10d",
+            "--vol-window",
+            "5d",
+            "--vol-budget",
+            "0.4",
+            "--calendar",
+            "AAA",
+            "--out-dir",
+            str(out),
+            "--json",
         ]
     )
     printed = capsys.readouterr().out
@@ -333,36 +416,51 @@ def test_cli_prints_a_book_and_writes_it(tmp_path: Path, capsys):
 def test_cli_explains_a_missing_calendar(tmp_path: Path):
     root = archive(tmp_path, {"AAA": [100.0] * 40})
     with pytest.raises(SystemExit, match="NOPE"):
-        riskparity.main(["--data-dir", str(root), "--calendar", "NOPE", "--no-artifacts"])
+        riskparity.main(
+            ["--data-dir", str(root), "--calendar", "NOPE", "--no-artifacts"]
+        )
 
 
 def test_cli_rejects_a_nonsense_duration(tmp_path: Path):
     root = archive(tmp_path, {"AAA": [100.0] * 40})
     with pytest.raises(SystemExit, match="cannot read"):
-        riskparity.main(["--data-dir", str(root), "--rebalance", "soon", "--no-artifacts"])
+        riskparity.main(
+            ["--data-dir", str(root), "--rebalance", "soon", "--no-artifacts"]
+        )
 
 
 def test_a_stablecoin_is_not_a_position(tmp_path: Path):
     """Inverse volatility would park the book in the calmest pair — 91.6% measured."""
-    stable = [1.0 + 0.00001 * (i % 3) for i in range(80)]      # a pegged pair
-    normal = [100.0 + 10 * (i % 2) for i in range(80)]         # a real one
+    stable = [1.0 + 0.00001 * (i % 3) for i in range(80)]  # a pegged pair
+    normal = [100.0 + 10 * (i % 2) for i in range(80)]  # a real one
     root = archive(tmp_path, {"USDC-USDT": stable, "AAA-USDT": normal})
     result = run(root, top=2, weight_scheme="invvol", vol_budget=None, rebalance=20)
     assert result.rebalances
     weights = result.rebalances[-1].weights
-    assert "USDC-USDT" not in weights  # below the volatility floor: excluded, not weighted
+    assert (
+        "USDC-USDT" not in weights
+    )  # below the volatility floor: excluded, not weighted
     assert weights["AAA-USDT"] == pytest.approx(1.0)
 
 
 def test_no_single_name_may_dominate_the_book(tmp_path: Path):
     root = archive(
         tmp_path,
-        {"CALM": [100.0 * (1.015 if i % 2 else 0.985) for i in range(80)],
-         "MID": [100.0 * (1.05 if i % 2 else 0.95) for i in range(80)],
-         "WILD": [100.0 * (1.3 if i % 2 else 0.77) for i in range(80)],
-         "EDGE": [100.0 * (1.12 if i % 2 else 0.89) for i in range(80)]},
+        {
+            "CALM": [100.0 * (1.015 if i % 2 else 0.985) for i in range(80)],
+            "MID": [100.0 * (1.05 if i % 2 else 0.95) for i in range(80)],
+            "WILD": [100.0 * (1.3 if i % 2 else 0.77) for i in range(80)],
+            "EDGE": [100.0 * (1.12 if i % 2 else 0.89) for i in range(80)],
+        },
     )
-    result = run(root, top=4, weight_scheme="invvol", vol_budget=None, rebalance=20, max_weight=0.25)
+    result = run(
+        root,
+        top=4,
+        weight_scheme="invvol",
+        vol_budget=None,
+        rebalance=20,
+        max_weight=0.25,
+    )
     assert result.rebalances
     weights = result.rebalances[-1].weights
     assert weights  # the calmest name is below the floor, so three are left
@@ -373,10 +471,17 @@ def test_no_single_name_may_dominate_the_book(tmp_path: Path):
 def test_the_cap_returns_a_hand_computed_book():
     """Three names capped at a quarter can hold three quarters; the rest is cash."""
     capped = riskparity.cap_weights({"A": 0.9, "B": 0.05, "C": 0.05}, 0.25)
-    assert capped == {"A": pytest.approx(0.25), "B": pytest.approx(0.25), "C": pytest.approx(0.25)}
+    assert capped == {
+        "A": pytest.approx(0.25),
+        "B": pytest.approx(0.25),
+        "C": pytest.approx(0.25),
+    }
     assert sum(capped.values()) == pytest.approx(0.75)
     assert riskparity.cap_weights({"A": 1.0}, 0.25) == {"A": 0.25}
-    assert riskparity.cap_weights({"A": 0.6, "B": 0.4}, 1.0) == {"A": 0.6, "B": 0.4}  # no cap
+    assert riskparity.cap_weights({"A": 0.6, "B": 0.4}, 1.0) == {
+        "A": 0.6,
+        "B": 0.4,
+    }  # no cap
 
 
 def test_the_cap_grows_with_a_small_book():
@@ -391,14 +496,26 @@ def test_the_cap_grows_with_a_small_book():
 
 
 def test_a_window_is_the_tail_of_the_full_book(tmp_path: Path):
-    closes = [100.0 * (1.01 ** i) for i in range(120)]
-    root = archive(tmp_path, {"AAA": closes, "BBB": [100.0 + (i % 7) for i in range(120)]})
+    closes = [100.0 * (1.01**i) for i in range(120)]
+    root = archive(
+        tmp_path, {"AAA": closes, "BBB": [100.0 + (i % 7) for i in range(120)]}
+    )
     aligned, times = aligned_for(root)
     full = riskparity.run_riskparity(
-        aligned, times, timeframe="1d", top=2, lookback=20, rebalance=20,
-        vol_budget=None, vol_window=10, min_history=0, costs=PAID,
+        aligned,
+        times,
+        timeframe="1d",
+        top=2,
+        lookback=20,
+        rebalance=20,
+        vol_budget=None,
+        vol_window=10,
+        min_history=0,
+        costs=PAID,
     )
-    windowed = riskparity.restrict(full, first=times[-40], text="40d", label="(last 40d)")
+    windowed = riskparity.restrict(
+        full, first=times[-40], text="40d", label="(last 40d)"
+    )
     assert windowed.times == times[-40:]  # both ends included
     assert windowed.equity[0] == pytest.approx(1.0)
     assert windowed.equity[-1] == pytest.approx(full.equity[-1] / full.equity[-40])
@@ -408,12 +525,20 @@ def test_a_window_is_the_tail_of_the_full_book(tmp_path: Path):
 
 
 def test_a_window_keeps_only_its_own_rebalances_and_its_own_fees(tmp_path: Path):
-    closes = [100.0 * (1.005 ** i) for i in range(120)]
+    closes = [100.0 * (1.005**i) for i in range(120)]
     root = archive(tmp_path, {"AAA": closes, "BBB": [100.0] * 120})
     aligned, times = aligned_for(root)
     full = riskparity.run_riskparity(
-        aligned, times, timeframe="1d", top=2, lookback=20, rebalance=20,
-        vol_budget=None, vol_window=10, min_history=0, costs=PAID,
+        aligned,
+        times,
+        timeframe="1d",
+        top=2,
+        lookback=20,
+        rebalance=20,
+        vol_budget=None,
+        vol_window=10,
+        min_history=0,
+        costs=PAID,
     )
     assert len(full.rebalances) >= 3
     windowed = riskparity.restrict(full, first=times[-40], text="40d")
@@ -425,21 +550,34 @@ def test_a_window_keeps_only_its_own_rebalances_and_its_own_fees(tmp_path: Path)
     )
 
 
-def test_a_window_with_a_buy_and_hold_line_still_restates_its_fees_correctly(tmp_path: Path):
+def test_a_window_with_a_buy_and_hold_line_still_restates_its_fees_correctly(
+    tmp_path: Path,
+):
     """The reference curve must not become the divisor for the window's commission.
 
     Naming a local `base` inside the rebase shadowed the window's own equity base, and
     a real run's fees came out 2.5x too small — invisible in a fixture whose equity is
     near 1.0, which is why this one is made to grow first.
     """
-    closes = [100.0 * (1.01 ** i) for i in range(120)]
+    closes = [100.0 * (1.01**i) for i in range(120)]
     root = archive(tmp_path, {"AAA": closes, "BBB": [100.0] * 120})
     aligned, times = aligned_for(root)
     full = riskparity.run_riskparity(
-        aligned, times, timeframe="1d", top=2, lookback=20, rebalance=10,
-        vol_budget=None, vol_window=10, min_history=0, costs=PAID, buy_hold="AAA",
+        aligned,
+        times,
+        timeframe="1d",
+        top=2,
+        lookback=20,
+        rebalance=10,
+        vol_budget=None,
+        vol_window=10,
+        min_history=0,
+        costs=PAID,
+        buy_hold="AAA",
     )
-    assert full.equity[-41] > 1.2  # the divisor and the hold curve are not interchangeable
+    assert (
+        full.equity[-41] > 1.2
+    )  # the divisor and the hold curve are not interchangeable
     assert full.buy_hold_equity[0] == pytest.approx(1.0 - PAID.rate)
     windowed = riskparity.restrict(full, first=times[-40], text="40d")
     assert windowed.fees_paid == pytest.approx(
@@ -450,12 +588,20 @@ def test_a_window_with_a_buy_and_hold_line_still_restates_its_fees_correctly(tmp
 
 def test_a_window_indexes_its_own_timeline(tmp_path: Path):
     """Markers and rows must address the window, not the run it was cut from."""
-    closes = [100.0 * (1.005 ** i) for i in range(140)]
+    closes = [100.0 * (1.005**i) for i in range(140)]
     root = archive(tmp_path, {"AAA": closes, "BBB": [100.0] * 140})
     aligned, times = aligned_for(root)
     full = riskparity.run_riskparity(
-        aligned, times, timeframe="1d", top=2, lookback=20, rebalance=20,
-        vol_budget=None, vol_window=10, min_history=0, costs=PAID,
+        aligned,
+        times,
+        timeframe="1d",
+        top=2,
+        lookback=20,
+        rebalance=20,
+        vol_budget=None,
+        vol_window=10,
+        min_history=0,
+        costs=PAID,
     )
     windowed = riskparity.restrict(full, first=times[-45], text="45d")
     assert windowed.rebalances
@@ -475,44 +621,86 @@ def test_a_window_indexes_its_own_timeline(tmp_path: Path):
 
 
 def test_a_window_says_the_book_was_taken_as_it_stood(tmp_path: Path):
-    root = archive(tmp_path, {"AAA": [100.0 + i for i in range(80)], "BBB": [100.0] * 80})
+    root = archive(
+        tmp_path, {"AAA": [100.0 + i for i in range(80)], "BBB": [100.0] * 80}
+    )
     aligned, times = aligned_for(root)
     full = riskparity.run_riskparity(
-        aligned, times, timeframe="1d", top=2, lookback=10, rebalance=10,
-        vol_budget=None, vol_window=5, min_history=0, costs=PAID,
+        aligned,
+        times,
+        timeframe="1d",
+        top=2,
+        lookback=10,
+        rebalance=10,
+        vol_budget=None,
+        vol_window=5,
+        min_history=0,
+        costs=PAID,
     )
     windowed = riskparity.restrict(full, first=times[-30], text="30d")
     assert any("as it stood" in w for w in windowed.warnings)
-    assert not any("2017" in w for w in windowed.warnings)  # the old history warning is gone
+    assert not any(
+        "2017" in w for w in windowed.warnings
+    )  # the old history warning is gone
 
 
 def test_a_window_at_the_very_start_is_the_same_book(tmp_path: Path):
-    root = archive(tmp_path, {"AAA": [100.0 + i for i in range(60)], "BBB": [100.0] * 60})
+    root = archive(
+        tmp_path, {"AAA": [100.0 + i for i in range(60)], "BBB": [100.0] * 60}
+    )
     aligned, times = aligned_for(root)
     full = riskparity.run_riskparity(
-        aligned, times, timeframe="1d", top=2, lookback=5, rebalance=10,
-        vol_budget=None, vol_window=5, min_history=0, costs=PAID,
+        aligned,
+        times,
+        timeframe="1d",
+        top=2,
+        lookback=5,
+        rebalance=10,
+        vol_budget=None,
+        vol_window=5,
+        min_history=0,
+        costs=PAID,
     )
     assert riskparity.restrict(full, first=times[0], text="all") is full
 
 
 def test_a_window_too_short_to_measure_is_rejected(tmp_path: Path):
-    root = archive(tmp_path, {"AAA": [100.0 + i for i in range(60)], "BBB": [100.0] * 60})
+    root = archive(
+        tmp_path, {"AAA": [100.0 + i for i in range(60)], "BBB": [100.0] * 60}
+    )
     aligned, times = aligned_for(root)
     full = riskparity.run_riskparity(
-        aligned, times, timeframe="1d", top=2, lookback=5, rebalance=10,
-        vol_budget=None, vol_window=5, min_history=0, costs=PAID,
+        aligned,
+        times,
+        timeframe="1d",
+        top=2,
+        lookback=5,
+        rebalance=10,
+        vol_budget=None,
+        vol_window=5,
+        min_history=0,
+        costs=PAID,
     )
     with pytest.raises(ValueError, match="give a longer period"):
         riskparity.restrict(full, first=times[-2], text="1d")
 
 
 def test_the_window_shows_up_in_the_artifact_name(tmp_path: Path):
-    root = archive(tmp_path, {"AAA": [100.0 + i for i in range(60)], "BBB": [100.0] * 60})
+    root = archive(
+        tmp_path, {"AAA": [100.0 + i for i in range(60)], "BBB": [100.0] * 60}
+    )
     aligned, times = aligned_for(root)
     full = riskparity.run_riskparity(
-        aligned, times, timeframe="1d", top=2, lookback=5, rebalance=10,
-        vol_budget=0.4, vol_window=5, min_history=0, costs=PAID,
+        aligned,
+        times,
+        timeframe="1d",
+        top=2,
+        lookback=5,
+        rebalance=10,
+        vol_budget=0.4,
+        vol_window=5,
+        min_history=0,
+        costs=PAID,
     )
     windowed = riskparity.restrict(full, first=times[-40], text="40d")
     assert riskparity.artifact_stem(full) != riskparity.artifact_stem(windowed)
@@ -520,13 +708,31 @@ def test_the_window_shows_up_in_the_artifact_name(tmp_path: Path):
 
 
 def test_cli_reports_only_the_last_stretch(tmp_path: Path, capsys):
-    closes = [100.0 * (1.004 ** i) for i in range(200)]
+    closes = [100.0 * (1.004**i) for i in range(200)]
     root = archive(tmp_path, {"AAA": closes, "BBB": [100.0] * 200})
     code = riskparity.main(
         [
-            "--data-dir", str(root), "--timeframe", "1d", "--top", "2", "--min-history", "0d",
-            "--lookback", "20d", "--rebalance", "20d", "--vol-window", "10d",
-            "--vol-budget", "none", "--calendar", "AAA", "--last", "60d", "--no-artifacts",
+            "--data-dir",
+            str(root),
+            "--timeframe",
+            "1d",
+            "--top",
+            "2",
+            "--min-history",
+            "0d",
+            "--lookback",
+            "20d",
+            "--rebalance",
+            "20d",
+            "--vol-window",
+            "10d",
+            "--vol-budget",
+            "none",
+            "--calendar",
+            "AAA",
+            "--last",
+            "60d",
+            "--no-artifacts",
         ]
     )
     printed = capsys.readouterr().out
@@ -536,12 +742,25 @@ def test_cli_reports_only_the_last_stretch(tmp_path: Path, capsys):
 
 
 def test_cli_rejects_a_window_that_is_too_short(tmp_path: Path):
-    root = archive(tmp_path, {"AAA": [100.0 + i for i in range(60)], "BBB": [100.0] * 60})
+    root = archive(
+        tmp_path, {"AAA": [100.0 + i for i in range(60)], "BBB": [100.0] * 60}
+    )
     with pytest.raises(SystemExit):
         riskparity.main(
             [
-                "--data-dir", str(root), "--calendar", "AAA", "--min-history", "0d",
-                "--lookback", "5d", "--rebalance", "10d", "--last", "1d", "--no-artifacts",
+                "--data-dir",
+                str(root),
+                "--calendar",
+                "AAA",
+                "--min-history",
+                "0d",
+                "--lookback",
+                "5d",
+                "--rebalance",
+                "10d",
+                "--last",
+                "1d",
+                "--no-artifacts",
             ]
         )
 
@@ -569,8 +788,10 @@ def test_the_chart_says_what_its_red_and_green_lines_mean(tmp_path: Path):
     for rebalance in result.rebalances:
         change = rebalance.invested - previous
         up, down, same = (
-            (up + 1, down, same) if change > 0.005
-            else (up, down + 1, same) if change < -0.005
+            (up + 1, down, same)
+            if change > 0.005
+            else (up, down + 1, same)
+            if change < -0.005
             else (up, down, same + 1)
         )
         previous = rebalance.invested
@@ -579,7 +800,10 @@ def test_the_chart_says_what_its_red_and_green_lines_mean(tmp_path: Path):
     path = tmp_path / "chart.svg"
     riskparity.write_chart(path, result)
     text = path.read_text()
-    assert f"rebalances: more invested = green ({up}), less invested = red ({down})" in text
+    assert (
+        f"rebalances: more invested = green ({up}), less invested = red ({down})"
+        in text
+    )
     if same:
         assert f"size unchanged = grey ({same})" in text
     assert "position changes" not in text  # these are rebalances, not entries and exits
@@ -612,10 +836,19 @@ def test_a_late_listing_sits_in_cash_until_it_has_a_price(tmp_path: Path):
     )
     aligned, times = aligned_for(root)
     result = riskparity.run_riskparity(
-        aligned, times, timeframe="1d", top=1, lookback=5, rebalance=10,
-        vol_budget=None, vol_window=5, min_history=0, costs=PAID, buy_hold="BBB",
+        aligned,
+        times,
+        timeframe="1d",
+        top=1,
+        lookback=5,
+        rebalance=10,
+        vol_budget=None,
+        vol_window=5,
+        min_history=0,
+        costs=PAID,
+        buy_hold="BBB",
     )
-    assert result.buy_hold_equity[0] == pytest.approx(1.0)     # in cash, no fee yet
+    assert result.buy_hold_equity[0] == pytest.approx(1.0)  # in cash, no fee yet
     assert result.buy_hold_equity[30] == pytest.approx(1.0 - PAID.rate)
     assert result.buy_hold.final_equity == pytest.approx(2.0 * (1.0 - PAID.rate))
 
@@ -623,12 +856,28 @@ def test_a_late_listing_sits_in_cash_until_it_has_a_price(tmp_path: Path):
 def test_the_reference_can_be_switched_off_or_named(tmp_path: Path, capsys):
     closes = [100.0 * (1.01**i) for i in range(40)]
     root = archive(tmp_path, {"AAA": closes, "BBB": [100.0] * 40})
-    common = ["--data-dir", str(root), "--calendar", "AAA", "--top", "1", "--vol-budget", "none",
-              "--lookback", "5d", "--rebalance", "10d", "--vol-window", "5d",
-              "--min-history", "0d", "--no-artifacts"]
+    common = [
+        "--data-dir",
+        str(root),
+        "--calendar",
+        "AAA",
+        "--top",
+        "1",
+        "--vol-budget",
+        "none",
+        "--lookback",
+        "5d",
+        "--rebalance",
+        "10d",
+        "--vol-window",
+        "5d",
+        "--min-history",
+        "0d",
+        "--no-artifacts",
+    ]
     assert riskparity.main([*common, "--buy-hold", "none"]) == 0
     assert "buy & hold" not in capsys.readouterr().out
-    assert riskparity.main(common) == 0                       # defaults to the calendar symbol
+    assert riskparity.main(common) == 0  # defaults to the calendar symbol
     out = capsys.readouterr().out
     assert "buy & hold AAA" in out
     with pytest.raises(SystemExit, match="no series for it on the calendar"):
@@ -652,12 +901,21 @@ def test_a_name_that_loses_its_trend_is_sold_on_the_next_close(tmp_path: Path):
     # the first close that is below its level five bars earlier
     signal = next(i for i in range(5, len(closes)) if closes[i] <= closes[i - 5])
     result = riskparity.run_riskparity(
-        aligned, times, timeframe="1d", top=2, lookback=5, rebalance=40,
-        vol_budget=None, vol_window=5, min_history=0, costs=PAID, trend=5,
+        aligned,
+        times,
+        timeframe="1d",
+        top=2,
+        lookback=5,
+        rebalance=40,
+        vol_budget=None,
+        vol_window=5,
+        min_history=0,
+        costs=PAID,
+        trend=5,
     )
     exits = [i for i, _, _ in result.trend_exits]
     assert exits, "the fall must trigger the rule"
-    assert exits[0] == signal + 1          # decided on the signal bar, sold on the next close
+    assert exits[0] == signal + 1  # decided on the signal bar, sold on the next close
     assert not [s for i, s, _ in result.trend_exits if i == signal]
     assert result.invested_by_bar[exits[0]] < result.invested_by_bar[signal]
     assert result.trend_bars == 5
@@ -668,13 +926,23 @@ def test_an_exited_name_comes_back_only_on_the_rebalance_grid(tmp_path: Path):
     root = crashing(tmp_path)
     aligned, times = aligned_for(root)
     result = riskparity.run_riskparity(
-        aligned, times, timeframe="1d", top=2, lookback=5, rebalance=40,
-        vol_budget=None, vol_window=5, min_history=0, costs=PAID, trend=5,
+        aligned,
+        times,
+        timeframe="1d",
+        top=2,
+        lookback=5,
+        rebalance=40,
+        vol_budget=None,
+        vol_window=5,
+        min_history=0,
+        costs=PAID,
+        trend=5,
     )
     fills = {r.filled_index for r in result.rebalances}
     exits = {i for i, _, _ in result.trend_exits}
     entries = [
-        i for i in range(1, len(result.invested_by_bar))
+        i
+        for i in range(1, len(result.invested_by_bar))
         if result.invested_by_bar[i - 1] <= 0 < result.invested_by_bar[i]
     ]
     assert entries, "the book must come back at some point"
@@ -687,12 +955,29 @@ def test_the_trend_rule_never_reaches_into_the_benchmark(tmp_path: Path):
     root = crashing(tmp_path)
     aligned, times = aligned_for(root)
     plain = riskparity.run_riskparity(
-        aligned, times, timeframe="1d", top=2, lookback=5, rebalance=20,
-        vol_budget=None, vol_window=5, min_history=0, costs=PAID,
+        aligned,
+        times,
+        timeframe="1d",
+        top=2,
+        lookback=5,
+        rebalance=20,
+        vol_budget=None,
+        vol_window=5,
+        min_history=0,
+        costs=PAID,
     )
     gated = riskparity.run_riskparity(
-        aligned, times, timeframe="1d", top=2, lookback=5, rebalance=20,
-        vol_budget=None, vol_window=5, min_history=0, costs=PAID, trend=5,
+        aligned,
+        times,
+        timeframe="1d",
+        top=2,
+        lookback=5,
+        rebalance=20,
+        vol_budget=None,
+        vol_window=5,
+        min_history=0,
+        costs=PAID,
+        trend=5,
     )
     assert gated.gated_out or gated.trend_exits
     assert gated.benchmark_equity == pytest.approx(plain.benchmark_equity)
@@ -703,14 +988,22 @@ def test_without_the_rule_nothing_moves(tmp_path: Path):
     root = crashing(tmp_path)
     aligned, times = aligned_for(root)
     kwargs = dict(
-        timeframe="1d", top=2, lookback=5, rebalance=20, vol_budget=0.4,
-        vol_window=5, min_history=0, costs=PAID,
+        timeframe="1d",
+        top=2,
+        lookback=5,
+        rebalance=20,
+        vol_budget=0.4,
+        vol_window=5,
+        min_history=0,
+        costs=PAID,
     )
     before = riskparity.run_riskparity(aligned, times, **kwargs)
     after = riskparity.run_riskparity(aligned, times, trend=None, **kwargs)
     assert after.equity == before.equity
     assert after.trend_exits == [] and after.gated_out == []
-    assert after.invested_bar_mean == before.invested_bar_mean  # flat only before the first fill
+    assert (
+        after.invested_bar_mean == before.invested_bar_mean
+    )  # flat only before the first fill
     gated = riskparity.run_riskparity(aligned, times, trend=5, **kwargs)
     assert gated.flat_bar_share > before.flat_bar_share
     assert gated.invested_bar_mean < before.invested_bar_mean
@@ -721,8 +1014,15 @@ def test_the_rule_never_looks_ahead(tmp_path: Path):
     root = crashing(tmp_path)
     aligned, times = aligned_for(root)
     kwargs = dict(
-        timeframe="1d", top=2, lookback=5, rebalance=20, vol_budget=None,
-        vol_window=5, min_history=0, costs=PAID, trend=5,
+        timeframe="1d",
+        top=2,
+        lookback=5,
+        rebalance=20,
+        vol_budget=None,
+        vol_window=5,
+        min_history=0,
+        costs=PAID,
+        trend=5,
     )
     original = riskparity.run_riskparity(aligned, times, **kwargs)
     cut = 60
@@ -741,12 +1041,31 @@ def replace_row(row, index: int):
     return type(row)(**{**row.__dict__, "prices": prices})
 
 
-def test_the_rule_is_named_in_the_report_the_csv_and_the_artifact(tmp_path: Path, capsys):
+def test_the_rule_is_named_in_the_report_the_csv_and_the_artifact(
+    tmp_path: Path, capsys
+):
     root = crashing(tmp_path)
     out_dir = tmp_path / "out"
-    common = ["--data-dir", str(root), "--calendar", "AAA", "--top", "2", "--vol-budget", "none",
-              "--lookback", "5d", "--rebalance", "20d", "--vol-window", "5d", "--min-history", "0d",
-              "--out-dir", str(out_dir)]
+    common = [
+        "--data-dir",
+        str(root),
+        "--calendar",
+        "AAA",
+        "--top",
+        "2",
+        "--vol-budget",
+        "none",
+        "--lookback",
+        "5d",
+        "--rebalance",
+        "20d",
+        "--vol-window",
+        "5d",
+        "--min-history",
+        "0d",
+        "--out-dir",
+        str(out_dir),
+    ]
     assert riskparity.main([*common, "--trend", "5d"]) == 0
     printed = capsys.readouterr().out
     assert "trend rule" in printed and "at work" in printed
@@ -770,31 +1089,58 @@ def test_a_window_counts_the_commission_an_exit_paid(tmp_path: Path):
     root = crashing(tmp_path)
     aligned, times = aligned_for(root)
     full = riskparity.run_riskparity(
-        aligned, times, timeframe="1d", top=2, lookback=5, rebalance=20,
-        vol_budget=None, vol_window=5, min_history=0, costs=PAID, trend=5,
+        aligned,
+        times,
+        timeframe="1d",
+        top=2,
+        lookback=5,
+        rebalance=20,
+        vol_budget=None,
+        vol_window=5,
+        min_history=0,
+        costs=PAID,
+        trend=5,
     )
     exits = [i for i, _, _ in full.trend_exits]
     assert exits
     windowed = riskparity.restrict(full, first=times[exits[0] - 1], text="20d")
     base = full.equity[len(times) - len(windowed.times)]
     assert windowed.fees_paid == pytest.approx(
-        sum(full.cost_by_bar[i] for i, t in enumerate(times) if t >= times[exits[0] - 1]) / base
+        sum(
+            full.cost_by_bar[i] for i, t in enumerate(times) if t >= times[exits[0] - 1]
+        )
+        / base
     )
-    inside_exits = sum(paid for i, _, paid in full.trend_exits if times[i] >= times[exits[0] - 1])
+    inside_exits = sum(
+        paid for i, _, paid in full.trend_exits if times[i] >= times[exits[0] - 1]
+    )
     assert inside_exits > 0
     rebalance_only = sum(r.cost for r in windowed.rebalances) / base
     assert windowed.fees_paid > rebalance_only
 
 
 def test_cli_drops_tokenised_equities_when_asked(tmp_path: Path, capsys):
-    root = archive(tmp_path, {
-        "AAA-USDT": [100.0 + i * 0.5 for i in range(400)],
-        "AAPLX-USDT": [330.0 + (i % 7) for i in range(400)],
-    })
-    code = riskparity.main([
-        "--data-dir", str(root), "--calendar", "AAA-USDT", "--top", "2",
-        "--min-history", "30d", "--no-artifacts", "--exclude-equities",
-    ])
+    root = archive(
+        tmp_path,
+        {
+            "AAA-USDT": [100.0 + i * 0.5 for i in range(400)],
+            "AAPLX-USDT": [330.0 + (i % 7) for i in range(400)],
+        },
+    )
+    code = riskparity.main(
+        [
+            "--data-dir",
+            str(root),
+            "--calendar",
+            "AAA-USDT",
+            "--top",
+            "2",
+            "--min-history",
+            "30d",
+            "--no-artifacts",
+            "--exclude-equities",
+        ]
+    )
     printed = capsys.readouterr().out
     assert code == 0
     assert "dropped: AAPLX-USDT" in printed

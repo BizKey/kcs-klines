@@ -115,8 +115,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--symbol", default="BTC-USDT", help="series to load (default: %(default)s)")
-    parser.add_argument("--timeframe", default="1h", help="bar size (default: %(default)s)")
+    parser.add_argument(
+        "--symbol", default="BTC-USDT", help="series to load (default: %(default)s)"
+    )
+    parser.add_argument(
+        "--timeframe", default="1h", help="bar size (default: %(default)s)"
+    )
     parser.add_argument(
         "--strategy",
         default="sma",
@@ -137,8 +141,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "(e.g. 10,40,25: full size until -10%%, a quarter of it at -40%%), or `off` "
         "(default: %(default)s)",
     )
-    parser.add_argument("--fee", type=float, default=0.001, help="commission per side (default: %(default)s)")
-    parser.add_argument("--slippage", type=float, default=0.0, help="extra cost per side (default: %(default)s)")
+    parser.add_argument(
+        "--fee",
+        type=float,
+        default=0.001,
+        help="commission per side (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--slippage",
+        type=float,
+        default=0.0,
+        help="extra cost per side (default: %(default)s)",
+    )
     parser.add_argument(
         "--sweep",
         default=None,
@@ -150,15 +164,33 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         metavar="PERIOD",
         help="report only the last stretch, e.g. 1y, 6mon, 30d, 12h (the strategy still sees "
-             "all the history before it)",
+        "all the history before it)",
     )
-    parser.add_argument("--no-fee-grid", action="store_true", help="skip the commission sensitivity table")
-    parser.add_argument("--data-dir", type=Path, default=DATA_DIR, help="root of the parquet archive")
+    parser.add_argument(
+        "--no-fee-grid",
+        action="store_true",
+        help="skip the commission sensitivity table",
+    )
+    parser.add_argument(
+        "--data-dir", type=Path, default=DATA_DIR, help="root of the parquet archive"
+    )
     parser.add_argument("--out-dir", type=Path, default=OUT_DIR)
-    parser.add_argument("--no-artifacts", action="store_true", help="print only, write nothing")
-    parser.add_argument("--json", action="store_true", help="also write the metrics as JSON")
-    parser.add_argument("--json-curves", action="store_true", help="include the equity curve in that JSON")
-    parser.add_argument("--list", action="store_true", help="list strategies and stored series, then exit")
+    parser.add_argument(
+        "--no-artifacts", action="store_true", help="print only, write nothing"
+    )
+    parser.add_argument(
+        "--json", action="store_true", help="also write the metrics as JSON"
+    )
+    parser.add_argument(
+        "--json-curves",
+        action="store_true",
+        help="include the equity curve in that JSON",
+    )
+    parser.add_argument(
+        "--list",
+        action="store_true",
+        help="list strategies and stored series, then exit",
+    )
     parser.add_argument(
         "--journal",
         nargs="?",
@@ -173,7 +205,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         metavar="DATE",
         help="report only the stretch starting here (ISO date); with --to this measures a "
-             "window in the middle of the history, warm-up intact",
+        "window in the middle of the history, warm-up intact",
     )
     parser.add_argument(
         "--to",
@@ -186,7 +218,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--allow-short",
         action="store_true",
         help="run a strategy that takes short exposure; by default the tool refuses one, "
-             "because a spot account cannot hold a negative balance",
+        "because a spot account cannot hold a negative balance",
     )
     parser.add_argument("--note", default="", help="a human note for the journal entry")
     parser.add_argument(
@@ -222,8 +254,12 @@ def parse_params(raw: list[str], strategy: str) -> dict[str, object]:
         if not separator:
             raise SystemExit(f"--param needs NAME=VALUE, got {item!r}")
         if name not in accepted:
-            expected = ", ".join(f"{key} (default {value!r})" for key, value in accepted.items())
-            raise SystemExit(f"strategy {strategy!r} has no parameter {name!r}; it accepts: {expected}")
+            expected = ", ".join(
+                f"{key} (default {value!r})" for key, value in accepted.items()
+            )
+            raise SystemExit(
+                f"strategy {strategy!r} has no parameter {name!r}; it accepts: {expected}"
+            )
         params[name] = coerce(value)
     return params
 
@@ -245,7 +281,9 @@ def parse_sweep(raw: str, strategy: str) -> tuple[str, list[object]]:
         )
     accepted = parameters(strategy)
     if name not in accepted:
-        raise SystemExit(f"strategy {strategy!r} has no parameter {name!r}; it accepts: {', '.join(accepted)}")
+        raise SystemExit(
+            f"strategy {strategy!r} has no parameter {name!r}; it accepts: {', '.join(accepted)}"
+        )
     parsed = [coerce(value) for value in values.split(",") if value.strip()]
     if not parsed:
         raise SystemExit(f"--sweep {raw!r} has no values")
@@ -280,7 +318,6 @@ def run(
     since: int | None = None,
     until: int | None = None,
 ):
-
     """One strategy over one series, optionally reported for the last stretch only.
 
     The run itself always sees the whole history — that is what makes the signals
@@ -307,7 +344,7 @@ def run(
             first=since if since is not None else bars[0].time,
             last=until,
             label=f"{strategy.slug} ({data.iso(since or bars[0].time)[:10]}.."
-                  f"{data.iso(until or bars[-1].time)[:10]})",
+            f"{data.iso(until or bars[-1].time)[:10]})",
         )
     if window is None or window.full:
         return result
@@ -365,8 +402,15 @@ def main(argv: list[str] | None = None) -> int:
     dd_scale = drawdown_scale_of(args.dd_scale)
     try:
         result = run(
-            bars, strategy, args.timeframe, costs, window, dd_scale,
-            allow_short=args.allow_short, since=since, until=until,
+            bars,
+            strategy,
+            args.timeframe,
+            costs,
+            window,
+            dd_scale,
+            allow_short=args.allow_short,
+            since=since,
+            until=until,
         )
     except ValueError as exc:
         # a spot account cannot hold a short, and that is a message, not a stack trace
@@ -376,14 +420,19 @@ def main(argv: list[str] | None = None) -> int:
             0,
             f"drawdown overlay: exposure cut from -{dd_scale.start:.0%} of the account's own high, "
             f"down to {dd_scale.floor:.0%} of the target at -{dd_scale.full:.0%} "
-            f"(average multiplier {sum(result.exposure_scale)/len(result.exposure_scale):.2f})",
+            f"(average multiplier {sum(result.exposure_scale) / len(result.exposure_scale):.2f})",
         )
-    print(f"loaded {quality.bars:,} bars from {len(data.series_files(args.data_dir, args.symbol, args.timeframe))} files")
+    print(
+        f"loaded {quality.bars:,} bars from {len(data.series_files(args.data_dir, args.symbol, args.timeframe))} files"
+    )
     if window is not None:
         print(window.line(bars))
     print(
         report.render(
-            args.symbol, args.timeframe, window.quality(bars, args.timeframe) if window else quality, result
+            args.symbol,
+            args.timeframe,
+            window.quality(bars, args.timeframe) if window else quality,
+            result,
         )
     )
     print()
@@ -398,12 +447,17 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.no_artifacts:
         if args.journal is not None:
-            print("note: --journal needs the trade table; rerun without --no-artifacts", file=sys.stderr)
+            print(
+                "note: --journal needs the trade table; rerun without --no-artifacts",
+                file=sys.stderr,
+            )
             return 2
         return 0
 
     overlay = (
-        f"_dd{dd_scale.start*100:.0f}-{dd_scale.floor*100:.0f}" if dd_scale is not None else ""
+        f"_dd{dd_scale.start * 100:.0f}-{dd_scale.floor * 100:.0f}"
+        if dd_scale is not None
+        else ""
     )
     stem = (
         f"{strategy.slug}{overlay}_{args.symbol}_{args.timeframe}"
@@ -454,7 +508,9 @@ def _record(args, result, quality, bars, params: dict, trades_path: Path) -> Non
         entry.trades_file = target.name
     path = journal.append(entry, directory)
     print(f"journalized {entry.run_id} -> {path}")
-    print(f"            verify later with: uv run kcs-journal verify --id {entry.run_id}")
+    print(
+        f"            verify later with: uv run kcs-journal verify --id {entry.run_id}"
+    )
 
 
 def _print_recent_trades(result: engine.BacktestResult, count: int = 10) -> None:
@@ -482,17 +538,25 @@ def _print_sweep(
     name, values = sweep
     print()
     print(f"parameter sweep over {name} (net, same fee and execution):")
-    print(f"  {name:>8}{'trades':>9}{'total':>12}{'CAGR':>10}{'maxDD':>10}{'Sharpe':>9}{'exposure':>10}")
+    print(
+        f"  {name:>8}{'trades':>9}{'total':>12}{'CAGR':>10}{'maxDD':>10}{'Sharpe':>9}{'exposure':>10}"
+    )
     for value in values:
         attempt = run(
-            bars, strategy_for(args.strategy, params, **{name: value}), args.timeframe, costs, window
+            bars,
+            strategy_for(args.strategy, params, **{name: value}),
+            args.timeframe,
+            costs,
+            window,
         )
         perf = attempt.performance
         print(
             f"  {str(value):>8}{len(attempt.closed_trades):>9}{pct(perf.total_return):>12}"
             f"{pct(perf.cagr):>10}{pct(perf.max_dd):>10}{perf.sharpe:>9.2f}{pct(attempt.exposure):>10}"
         )
-    bench = run(bars, strategy_for(args.strategy, params), args.timeframe, costs, window).benchmark.performance
+    bench = run(
+        bars, strategy_for(args.strategy, params), args.timeframe, costs, window
+    ).benchmark.performance
     print(
         f"  {'B&H':>8}{1:>9}{pct(bench.total_return):>12}{pct(bench.cagr):>10}"
         f"{pct(bench.max_dd):>10}{bench.sharpe:>9.2f}{'100.00%':>10}"
@@ -509,12 +573,19 @@ def _print_fee_grid(
 ) -> None:
     print()
     print("commission sensitivity (net, same signals):")
-    print(f"  {'fee/side':>9}{'trades':>9}{'final equity':>16}{'total':>14}{'CAGR':>10}")
+    print(
+        f"  {'fee/side':>9}{'trades':>9}{'final equity':>16}{'total':>14}{'CAGR':>10}"
+    )
     for fee in FEE_GRID:
         sweep = run(
-            bars, strategy, args.timeframe,
-            Costs(fee_per_side=fee, slippage_per_side=args.slippage), window,
-            allow_short=args.allow_short, since=since, until=until,
+            bars,
+            strategy,
+            args.timeframe,
+            Costs(fee_per_side=fee, slippage_per_side=args.slippage),
+            window,
+            allow_short=args.allow_short,
+            since=since,
+            until=until,
         )
         perf = sweep.performance
         print(
@@ -522,8 +593,14 @@ def _print_fee_grid(
             f"{pct(perf.total_return):>14}{pct(perf.cagr):>10}"
         )
     bench = run(
-        bars, strategy, args.timeframe, Costs(fee_per_side=args.fee), window,
-        allow_short=args.allow_short, since=since, until=until,
+        bars,
+        strategy,
+        args.timeframe,
+        Costs(fee_per_side=args.fee),
+        window,
+        allow_short=args.allow_short,
+        since=since,
+        until=until,
     ).benchmark.performance
     print(
         f"  {'B&H':>9}{1:>9}{bench.final_equity:>15.4f}x"

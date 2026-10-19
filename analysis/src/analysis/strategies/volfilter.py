@@ -45,7 +45,9 @@ class VolFilter(Strategy):
         min_observations: int = 20,
     ):
         if max_vol <= 0:
-            raise ValueError("max_vol is an annualised volatility ceiling and must be positive")
+            raise ValueError(
+                "max_vol is an annualised volatility ceiling and must be positive"
+            )
         if vol_window < 2:
             raise ValueError("vol_window must be at least 2 bars")
         self.inner = inner
@@ -75,7 +77,7 @@ class VolFilter(Strategy):
         returns = [closes[i] / closes[i - 1] - 1.0 for i in range(1, len(closes))]
         step = bar_step(bars)
         periods_per_year = SECONDS_PER_YEAR / step if step > 0 else 1.0
-        out = [True]            # the first bar has no return to measure: do not block it
+        out = [True]  # the first bar has no return to measure: do not block it
         for index, _ in enumerate(returns, start=1):
             window = returns[max(0, index - self.vol_window) : index]
             if len(window) < self.min_observations:

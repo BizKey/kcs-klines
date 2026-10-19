@@ -48,13 +48,17 @@ class ScaledStrategy(Strategy):
         min_observations: int = 20,
     ):
         if target_vol <= 0:
-            raise ValueError("target_vol must be positive (it is an annualised volatility)")
+            raise ValueError(
+                "target_vol must be positive (it is an annualised volatility)"
+            )
         if vol_window < 2:
             raise ValueError("vol_window must be at least 2 bars")
         if min_observations < 2:
             raise ValueError("min_observations must be at least 2")
         if not 0.0 <= floor <= cap <= 1.0:
-            raise ValueError(f"need 0 <= floor <= cap <= 1 (got floor={floor}, cap={cap})")
+            raise ValueError(
+                f"need 0 <= floor <= cap <= 1 (got floor={floor}, cap={cap})"
+            )
         self.inner = inner
         self.target_vol = target_vol
         self.vol_window = vol_window

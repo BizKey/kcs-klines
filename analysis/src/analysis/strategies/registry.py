@@ -48,7 +48,9 @@ def get_strategy(name: str, **params: object) -> Strategy:
     try:
         factory = REGISTRY[name]
     except KeyError:
-        raise KeyError(f"unknown strategy {name!r}; available: {', '.join(available())}") from None
+        raise KeyError(
+            f"unknown strategy {name!r}; available: {', '.join(available())}"
+        ) from None
     return factory(**params)
 
 
@@ -63,7 +65,9 @@ def parameters(name: str) -> dict[str, object]:
     `**kwargs` catch-all is ignored rather than reported as a parameter.
     """
     if name not in REGISTRY:
-        raise KeyError(f"unknown strategy {name!r}; available: {', '.join(available())}")
+        raise KeyError(
+            f"unknown strategy {name!r}; available: {', '.join(available())}"
+        )
     signature = inspect.signature(REGISTRY[name])
     kinds = (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
     return {
@@ -86,7 +90,9 @@ def describe_registry() -> list[str]:
     """Two lines per strategy: its name and parameters, then what it does."""
     lines: list[str] = []
     for name in available():
-        params = ", ".join(f"{key}={value!r}" for key, value in parameters(name).items())
+        params = ", ".join(
+            f"{key}={value!r}" for key, value in parameters(name).items()
+        )
         summary = (REGISTRY[name].__doc__ or "").strip().splitlines()
         sweep = sweep_parameter(name)
         sweep_text = f"   [--sweep {sweep}]" if sweep else ""

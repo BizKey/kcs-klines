@@ -115,10 +115,14 @@ def test_commission_still_decides_the_outcome(sma200_result, baseline_window):
     """The headline finding: gross beats buy & hold, net loses badly to it."""
     _, result = sma200_result
     assert result.gross_equity > result.benchmark.gross_equity  # signal has value
-    assert result.final_equity < result.benchmark.performance.final_equity  # costs eat it
+    assert (
+        result.final_equity < result.benchmark.performance.final_equity
+    )  # costs eat it
     free = run(baseline_window, SmaTrend(window=200), fee=0.0)
     assert free.final_equity == pytest.approx(EXPECTED_GROSS_EQUITY, rel=1e-6)
-    assert free.trades[0].net_return == pytest.approx(free.trades[0].gross_return, rel=1e-12)
+    assert free.trades[0].net_return == pytest.approx(
+        free.trades[0].gross_return, rel=1e-12
+    )
 
 
 def test_fill_timing_sensitivity_is_still_measured(sma200_result):

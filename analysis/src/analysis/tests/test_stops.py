@@ -10,7 +10,7 @@ from __future__ import annotations
 from ..data import Bar
 from ..strategies import get_strategy
 from ..strategies.stops import StopsStrategy
-from .conftest import START, STEP, make_bars
+from .conftest import make_bars
 
 
 def _bars(closes: list[float]) -> list[Bar]:
@@ -60,19 +60,23 @@ def test_the_cooldown_keeps_the_signal_out_after_it_has_been_stopped():
     bars = _bars([100.0, 100.0, 90.0, 100.0, 100.0, 100.0, 100.0])
     without = StopsStrategy(Always(), stop_loss=0.05).targets(bars)
     with_cooldown = StopsStrategy(Always(), stop_loss=0.05, cooldown=3).targets(bars)
-    assert without[2] == 0.0 and without[3] == 1.0        # back in immediately
-    assert with_cooldown[2:6] == [0.0, 0.0, 0.0, 0.0]     # and stayed out for the cooldown
-    assert with_cooldown[6] == 1.0                        # then allowed back in
+    assert without[2] == 0.0 and without[3] == 1.0  # back in immediately
+    assert with_cooldown[2:6] == [0.0, 0.0, 0.0, 0.0]  # and stayed out for the cooldown
+    assert with_cooldown[6] == 1.0  # then allowed back in
 
 
 def test_a_stop_looser_than_the_inner_exit_changes_nothing():
     """The law that explains the measurements: dead code if it never binds."""
     import statistics
 
-    closes = [100.0 + 4.0 * statistics.sin(index / 3.0) + 0.1 * index for index in range(400)]
+    closes = [
+        100.0 + 4.0 * statistics.sin(index / 3.0) + 0.1 * index for index in range(400)
+    ]
     bars = _bars(closes)
     plain = get_strategy("sma", window=20).targets(bars)
-    wrapped = get_strategy("stops-sma", window=20, stop_loss=0.90, cooldown=5).targets(bars)
+    wrapped = get_strategy("stops-sma", window=20, stop_loss=0.90, cooldown=5).targets(
+        bars
+    )
     assert wrapped == plain
 
 
@@ -81,7 +85,9 @@ def test_the_stops_family_is_registered_and_describes_itself():
 
     for name in ("stops-sma", "stops-breakout", "voltarget-stops-sma"):
         assert name in available()
-    described = get_strategy("stops-sma", window=50, stop_loss=0.1, cooldown=5).describe()
+    described = get_strategy(
+        "stops-sma", window=50, stop_loss=0.1, cooldown=5
+    ).describe()
     assert "stop loss 10%" in described and "on closes" in described
 
 

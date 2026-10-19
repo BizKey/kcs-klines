@@ -8,7 +8,6 @@ import pytest
 
 from .. import data, walkforward
 from ..metrics import Performance, performance
-from ..strategies import SmaTrend
 from .conftest import make_bars, wavy
 
 
@@ -50,7 +49,9 @@ def test_split_bounds_reject_impossible_windows():
 
 
 def test_expand_grid_is_the_cartesian_product():
-    grid = walkforward.expand_grid({"window": [50, 100], "mode": ["long-only", "long-short"]})
+    grid = walkforward.expand_grid(
+        {"window": [50, 100], "mode": ["long-only", "long-short"]}
+    )
     assert len(grid) == 4
     assert grid[0] == {"mode": "long-only", "window": 50}
     assert {"mode": "long-short", "window": 100} in grid
@@ -79,7 +80,11 @@ def test_pick_best_takes_the_highest_metric():
         ({"window": 200}, perf(0.3)),
     ]
     assert walkforward.pick_best(scored, "total_return") == 1
-    assert walkforward.pick_best(scored, "sharpe") in (0, 1, 2)  # sharpe differs from total here
+    assert walkforward.pick_best(scored, "sharpe") in (
+        0,
+        1,
+        2,
+    )  # sharpe differs from total here
 
 
 def test_pick_best_is_stable_on_ties():
@@ -102,7 +107,13 @@ def toy_bars(count: int = 400) -> list:
 def test_walkforward_stitches_the_test_windows():
     bars = toy_bars()
     result = walkforward.run_walkforward(
-        bars, "sma", {"window": [5, 20]}, "1h", train=100, test=50, metric="total_return"
+        bars,
+        "sma",
+        {"window": [5, 20]},
+        "1h",
+        train=100,
+        test=50,
+        metric="total_return",
     )
     splits = walkforward.split_bounds(len(bars), 100, 50)
     assert len(result.outcomes) == len(splits)
@@ -120,21 +131,37 @@ def test_walkforward_chooses_on_the_train_window_only():
     """Rewriting the future must not change what the past windows decided."""
     bars = toy_bars()
     baseline = walkforward.run_walkforward(
-        bars, "sma", {"window": [5, 20]}, "1h", train=100, test=50, metric="total_return"
+        bars,
+        "sma",
+        {"window": [5, 20]},
+        "1h",
+        train=100,
+        test=50,
+        metric="total_return",
     )
 
     edited = list(bars)
     first_test_end = baseline.outcomes[0].split.test_end
     for index in range(first_test_end, len(edited)):
         bar = edited[index]
-        edited[index] = data.Bar(bar.time, bar.open, bar.high, bar.low, bar.close * 3, bar.volume)
+        edited[index] = data.Bar(
+            bar.time, bar.open, bar.high, bar.low, bar.close * 3, bar.volume
+        )
 
     after = walkforward.run_walkforward(
-        edited, "sma", {"window": [5, 20]}, "1h", train=100, test=50, metric="total_return"
+        edited,
+        "sma",
+        {"window": [5, 20]},
+        "1h",
+        train=100,
+        test=50,
+        metric="total_return",
     )
     first_before, first_after = baseline.outcomes[0], after.outcomes[0]
     assert first_after.params == first_before.params
-    assert first_after.test.total_return == pytest.approx(first_before.test.total_return)
+    assert first_after.test.total_return == pytest.approx(
+        first_before.test.total_return
+    )
 
 
 def test_walkforward_reports_which_parameters_won_and_how_often():
@@ -157,11 +184,17 @@ def test_walkforward_warns_when_there_is_little_to_go_on():
 def test_walkforward_rejects_bad_input():
     bars = toy_bars()
     with pytest.raises(ValueError, match="not enough"):
-        walkforward.run_walkforward(bars, "sma", {"window": [5]}, "1h", train=10_000, test=10)
+        walkforward.run_walkforward(
+            bars, "sma", {"window": [5]}, "1h", train=10_000, test=10
+        )
     with pytest.raises(ValueError, match="metric"):
-        walkforward.run_walkforward(bars, "sma", {"window": [5]}, "1h", train=100, test=50, metric="x")
+        walkforward.run_walkforward(
+            bars, "sma", {"window": [5]}, "1h", train=100, test=50, metric="x"
+        )
     with pytest.raises(KeyError):
-        walkforward.run_walkforward(bars, "no-such-strategy", {"window": [5]}, "1h", train=100, test=50)
+        walkforward.run_walkforward(
+            bars, "no-such-strategy", {"window": [5]}, "1h", train=100, test=50
+        )
 
 
 def test_walkforward_summary_is_json_friendly():
@@ -172,12 +205,16 @@ def test_walkforward_summary_is_json_friendly():
     assert payload["splits"] == len(result.outcomes)
     assert payload["candidates"] == 2
     assert "out_of_sample" in payload and "buy_and_hold" in payload
-    assert payload["out_of_sample"]["total_return"] == pytest.approx(result.oos.total_return)
+    assert payload["out_of_sample"]["total_return"] == pytest.approx(
+        result.oos.total_return
+    )
 
 
 def test_walkforward_report_mentions_the_essentials():
     bars = toy_bars()
-    result = walkforward.run_walkforward(bars, "sma", {"window": [5, 20]}, "1h", train=100, test=50)
+    result = walkforward.run_walkforward(
+        bars, "sma", {"window": [5, 20]}, "1h", train=100, test=50
+    )
     text = walkforward.render(result, bars)
     assert "parameter stability" in text
     assert "out-of-sample" in text

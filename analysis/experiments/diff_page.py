@@ -28,7 +28,14 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 
 #: Files to leave out even when they changed: generated, or too noisy to review.
-SKIP = (".venv/", "target/", "__pycache__/", "analysis/out/", ".uv-cache/", ".pytest_cache/")
+SKIP = (
+    ".venv/",
+    "target/",
+    "__pycache__/",
+    "analysis/out/",
+    ".uv-cache/",
+    ".pytest_cache/",
+)
 
 #: How many diff lines a single file may contribute before it is truncated. A file
 #: this long is usually generated; the page says so rather than freezing the browser.
@@ -44,7 +51,7 @@ ORDER = {"source": 0, "test": 1, "doc": 2, "data": 3, "other": 4}
 @dataclass
 class FileDiff:
     path: str
-    status: str            # "modified", "added", "deleted", "untracked"
+    status: str  # "modified", "added", "deleted", "untracked"
     lines: list[str] = field(default_factory=list)
     added: int = 0
     removed: int = 0
@@ -73,14 +80,21 @@ def classify(path: str) -> str:
 
 def status_of(code: str) -> str:
     return {
-        "M": "modified", "A": "added", "D": "deleted", "R": "renamed",
-        "C": "copied", "T": "type change", "?": "untracked",
+        "M": "modified",
+        "A": "added",
+        "D": "deleted",
+        "R": "renamed",
+        "C": "copied",
+        "T": "type change",
+        "?": "untracked",
     }.get(code[0] if code[0] != " " else code[1], "modified")
 
 
 def changed_files(repo: Path, staged: bool) -> list[tuple[str, str]]:
     """`(status, path)` for everything the working tree (or the index) changed."""
-    listing = git("diff", "--cached", "--name-status" if staged else "--name-status", repo=repo)
+    listing = git(
+        "diff", "--cached", "--name-status" if staged else "--name-status", repo=repo
+    )
     if staged:
         listing = git("diff", "--cached", "--name-status", repo=repo)
         out = []
@@ -97,11 +111,11 @@ def changed_files(repo: Path, staged: bool) -> list[tuple[str, str]]:
         if len(line) < 4:
             continue
         code, path = line[:2], line[3:].strip()
-        if " -> " in path:                      # a rename: review the destination
+        if " -> " in path:  # a rename: review the destination
             path = path.split(" -> ", 1)[1]
         if any(skip in path for skip in SKIP):
             continue
-        if (repo / path).is_dir():              # never a directory: diff files
+        if (repo / path).is_dir():  # never a directory: diff files
             continue
         out.append((status_of(code), path))
     return out
@@ -117,7 +131,10 @@ def diff_of(status: str, path: str, repo: Path, staged: bool) -> FileDiff:
         # what the next commit would contain.
         completed = subprocess.run(
             ["git", "--no-pager", "diff", "--no-index", "--", "/dev/null", path],
-            cwd=repo, capture_output=True, text=True, check=False,
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            check=False,
         )
         text = completed.stdout
     else:
@@ -128,15 +145,28 @@ def diff_of(status: str, path: str, repo: Path, staged: bool) -> FileDiff:
     body = text.splitlines()
     result.binary = any(line.startswith("Binary files") for line in body)
     # Drop the git headers: the page draws its own, and they are noise on every file.
-    start = next((i for i, line in enumerate(body) if line.startswith("@@") or line.startswith("Binary")), None)
+    start = next(
+        (
+            i
+            for i, line in enumerate(body)
+            if line.startswith("@@") or line.startswith("Binary")
+        ),
+        None,
+    )
     if start is None:
         return result
     kept = body[start:]
     if len(kept) > MAX_LINES_PER_FILE:
-        kept = kept[:MAX_LINES_PER_FILE] + [f"… {len(kept) - MAX_LINES_PER_FILE:,} more lines"]
+        kept = kept[:MAX_LINES_PER_FILE] + [
+            f"… {len(kept) - MAX_LINES_PER_FILE:,} more lines"
+        ]
     result.lines = kept
-    result.added = sum(1 for line in kept if line.startswith("+") and not line.startswith("+++"))
-    result.removed = sum(1 for line in kept if line.startswith("-") and not line.startswith("---"))
+    result.added = sum(
+        1 for line in kept if line.startswith("+") and not line.startswith("+++")
+    )
+    result.removed = sum(
+        1 for line in kept if line.startswith("-") and not line.startswith("---")
+    )
     return result
 
 
@@ -150,8 +180,10 @@ def render_body(lines: list[str]) -> str:
             match = re.match(r"@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@", line)
             if match:
                 old_line, new_line = int(match.group(1)), int(match.group(2))
-            out.append(f'<div class="line hunk"><span class="num"></span><span class="num"></span>'
-                       f'<span class="code">{html.escape(line)}</span></div>')
+            out.append(
+                f'<div class="line hunk"><span class="num"></span><span class="num"></span>'
+                f'<span class="code">{html.escape(line)}</span></div>'
+            )
             continue
         if line.startswith("+"):
             marker, new_number = "add", str(new_line)
@@ -167,8 +199,13 @@ def render_body(lines: list[str]) -> str:
             new_line += 1
         # A minified bundle arrives as a handful of enormous lines; rendering one of them
         # whole makes the page unusable, so say what was elided instead.
-        shown = line if len(line) <= MAX_LINE_CHARS else (
-            line[:MAX_LINE_CHARS] + f" … [{len(line) - MAX_LINE_CHARS:,} more characters on this line]"
+        shown = (
+            line
+            if len(line) <= MAX_LINE_CHARS
+            else (
+                line[:MAX_LINE_CHARS]
+                + f" … [{len(line) - MAX_LINE_CHARS:,} more characters on this line]"
+            )
         )
         out.append(
             f'<div class="line {marker}"><span class="num">{old_number}</span>'
@@ -243,7 +280,11 @@ def build_page(diffs: list[FileDiff], command: str) -> str:
         total_add += diff.added
         total_del += diff.removed
         anchor = "f-" + re.sub(r"[^a-zA-Z0-9]+", "-", diff.path)
-        stat = "" if diff.binary else f'<span class="stat"> +{diff.added} −{diff.removed}</span>'
+        stat = (
+            ""
+            if diff.binary
+            else f'<span class="stat"> +{diff.added} −{diff.removed}</span>'
+        )
         nav.append(
             f'<a href="#{anchor}"><span class="path">{html.escape(diff.path)}</span>'
             f'<span class="meta"><span class="badge {diff.status}">{diff.status}</span>{stat}</span></a>'
@@ -261,17 +302,32 @@ def build_page(diffs: list[FileDiff], command: str) -> str:
     return PAGE.format(
         totals=f"{len(diffs)} files · +{total_add} −{total_del}",
         nav="".join(nav),
-        sections="".join(sections) or '<div class="empty">the working tree is clean</div>',
+        sections="".join(sections)
+        or '<div class="empty">the working tree is clean</div>',
         command=html.escape(command),
     )
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--repo", default=str(REPO), help="repository to review (default: this one)")
-    parser.add_argument("--out", default=None, help="where to write the page (default: analysis/out/changes.html)")
-    parser.add_argument("--staged", action="store_true", help="show what is in the index instead of the working tree")
-    parser.add_argument("--open", action="store_true", help="open the page in a browser")
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "--repo", default=str(REPO), help="repository to review (default: this one)"
+    )
+    parser.add_argument(
+        "--out",
+        default=None,
+        help="where to write the page (default: analysis/out/changes.html)",
+    )
+    parser.add_argument(
+        "--staged",
+        action="store_true",
+        help="show what is in the index instead of the working tree",
+    )
+    parser.add_argument(
+        "--open", action="store_true", help="open the page in a browser"
+    )
     args = parser.parse_args(argv)
 
     repo = Path(args.repo).resolve()

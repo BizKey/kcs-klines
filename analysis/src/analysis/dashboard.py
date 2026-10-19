@@ -51,7 +51,9 @@ PAGE = Path(__file__).with_name("dashboard.html")
 CANVAS_PAGE = Path(__file__).with_name("dashboard-canvas.html")
 
 #: Vendored, not fetched from a CDN: the archive is local and so is the dashboard.
-VENDOR = Path(__file__).with_name("vendor") / "lightweight-charts.standalone.production.js"
+VENDOR = (
+    Path(__file__).with_name("vendor") / "lightweight-charts.standalone.production.js"
+)
 
 #: The page's script tag, replaced by the library's source when a chart is exported, so a
 #: saved file carries its own renderer and works with no server and no network.
@@ -86,6 +88,7 @@ def vendored_library() -> str:
             "(see analysis/src/analysis/vendor/README.md)"
         )
     return VENDOR.read_text()
+
 
 #: Timeframes the collector stores, in the order the page shows them.
 TIMEFRAMES = ("1h", "4h", "1d", "1w", "1mon")
@@ -183,12 +186,19 @@ class Archive:
         self.require(symbol, timeframe)
         key = (symbol, timeframe)
         stamp = max(
-            (path.stat().st_mtime for path in data.series_files(self.data_dir, symbol, timeframe)),
+            (
+                path.stat().st_mtime
+                for path in data.series_files(self.data_dir, symbol, timeframe)
+            ),
             default=0.0,
         )
         with self._lock:
             hit = self._series.get(key)
-            if hit is not None and hit.fresh(self.cache_seconds) and hit.value[0] == stamp:
+            if (
+                hit is not None
+                and hit.fresh(self.cache_seconds)
+                and hit.value[0] == stamp
+            ):
                 return hit.value[1]  # type: ignore[return-value]
         loaded = data.load_series(self.data_dir, symbol, timeframe)
         with self._lock:
@@ -204,7 +214,11 @@ class Archive:
             hit = self._index.get(timeframe)
             if hit is not None and hit.fresh(self.cache_seconds):
                 return hit.value  # type: ignore[return-value]
-        rows = [row for symbol in self.symbols(timeframe) if (row := self._row(symbol, timeframe))]
+        rows = [
+            row
+            for symbol in self.symbols(timeframe)
+            if (row := self._row(symbol, timeframe))
+        ]
         rows.sort(key=lambda row: row["turnover"], reverse=True)
         with self._lock:
             self._index[timeframe] = Cached(rows, time.monotonic())
@@ -225,11 +239,13 @@ class Archive:
         if len(closes) < 2:
             raise ValueError(f"{symbol} has too few bars to say anything about")
         lookback = change_bars(timeframe)["1"]
-        recent = closes[-lookback - 1:]
+        recent = closes[-lookback - 1 :]
         returns = [
-            abs(recent[i] / recent[i - 1] - 1.0) for i in range(1, len(recent)) if recent[i - 1] > 0
+            abs(recent[i] / recent[i - 1] - 1.0)
+            for i in range(1, len(recent))
+            if recent[i - 1] > 0
         ]
-        tail = [bar for bar in bars[-(window + 1):]]
+        tail = [bar for bar in bars[-(window + 1) :]]
         tail_returns = [
             abs(tail[i].close / tail[i - 1].close - 1.0)
             for i in range(1, len(tail))
@@ -249,13 +265,17 @@ class Archive:
             "close": closes[-1],
             "change": (closes[-1] / recent[0] - 1.0) if len(recent) > 1 else None,
             "change_bars": lookback,
-            "median_abs_return": statistics.median(tail_returns) if tail_returns else None,
+            "median_abs_return": statistics.median(tail_returns)
+            if tail_returns
+            else None,
             "median_return_bars": len(tail_returns),
             "spread_per_side": spread,
             "spread_source": source,
             "spread_bars": 720,
             "turnover": row.get("turnover"),
-            "stale_days": round((row["last_time"] - bars[-1].time) / 86400, 1) if row.get("last_time") else None,
+            "stale_days": round((row["last_time"] - bars[-1].time) / 86400, 1)
+            if row.get("last_time")
+            else None,
         }
 
     def _row(self, symbol: str, timeframe: str) -> dict | None:
@@ -282,11 +302,15 @@ class Archive:
         needed = max(change_bars(timeframe).values()) + 1
         if len(newest["close"]) < needed and len(files) > 1:
             try:
-                older_closes = pq.read_table(files[-2], columns=["close"]).to_pydict()["close"]
+                older_closes = pq.read_table(files[-2], columns=["close"]).to_pydict()[
+                    "close"
+                ]
             except (OSError, ValueError):
                 older_closes = []
         columns = newest
-        closes = [value for value in older_closes + columns["close"] if value and value > 0]
+        closes = [
+            value for value in older_closes + columns["close"] if value and value > 0
+        ]
         if not closes:
             return None
         turnovers = [value for value in columns["turnover"] if value and value > 0]
@@ -304,7 +328,9 @@ class Archive:
         }
 
 
-def bars_payload(bars: list[data.Bar], *, bars_wanted: int, end: int | None = None) -> dict:
+def bars_payload(
+    bars: list[data.Bar], *, bars_wanted: int, end: int | None = None
+) -> dict:
     """The bars a request asked for, newest last, as parallel arrays.
 
     Parallel arrays instead of objects: the same data costs roughly a third of the
@@ -375,11 +401,13 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"timeframes": list(TIMEFRAMES), "default": "1d"})
             elif parsed.path == "/api/index":
                 timeframe = self._timeframe(query)
-                self._json({
-                    "timeframe": timeframe,
-                    "change_bars": change_bars(timeframe),
-                    "rows": self.archive.index(timeframe),
-                })
+                self._json(
+                    {
+                        "timeframe": timeframe,
+                        "change_bars": change_bars(timeframe),
+                        "rows": self.archive.index(timeframe),
+                    }
+                )
             elif parsed.path == "/api/bars":
                 self._bars(query)
             elif parsed.path == "/api/stats":
@@ -404,7 +432,9 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("bars must be at least 1")
         end = query.get("end")
         bars = self.archive.bars(symbol, timeframe)
-        payload = bars_payload(bars, bars_wanted=wanted, end=int(end[0]) if end else None)
+        payload = bars_payload(
+            bars, bars_wanted=wanted, end=int(end[0]) if end else None
+        )
         payload["symbol"] = symbol
         payload["timeframe"] = timeframe
         payload["series_bars"] = len(bars)
@@ -454,18 +484,24 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError(f"timeframe must be one of {', '.join(TIMEFRAMES)}")
         return timeframe
 
-    def _body(self, payload: bytes, content_type: str, *, download_as: str | None = None) -> None:
+    def _body(
+        self, payload: bytes, content_type: str, *, download_as: str | None = None
+    ) -> None:
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(payload)))
         self.send_header("Cache-Control", "no-store")
         if download_as:
-            self.send_header("Content-Disposition", f'attachment; filename="{download_as}"')
+            self.send_header(
+                "Content-Disposition", f'attachment; filename="{download_as}"'
+            )
         self.end_headers()
         self.wfile.write(payload)
 
     def _html(self, page: str, *, download_as: str | None = None) -> None:
-        self._body(page.encode("utf-8"), "text/html; charset=utf-8", download_as=download_as)
+        self._body(
+            page.encode("utf-8"), "text/html; charset=utf-8", download_as=download_as
+        )
 
     def _script(self, source: str) -> None:
         # Versioned by the filename in the vendor README, so caching it is safe.
@@ -495,9 +531,13 @@ def embed(page: str, payload: dict, *, vendor: str) -> str:
     so exporting cannot half-apply: either both are found or the export fails loudly.
     """
     if VENDOR_TAG not in page:
-        raise ValueError(f"the page has no {VENDOR_TAG!r} marker to inline the library into")
+        raise ValueError(
+            f"the page has no {VENDOR_TAG!r} marker to inline the library into"
+        )
     if "<script>window.__DATA__ = null;</script>" not in page:
-        raise ValueError("the page has no `window.__DATA__` marker to inline the bars into")
+        raise ValueError(
+            "the page has no `window.__DATA__` marker to inline the bars into"
+        )
     return page.replace(VENDOR_TAG, f"<script>{vendor}</script>").replace(
         "<script>window.__DATA__ = null;</script>",
         f"<script>window.__DATA__ = {json.dumps(payload, separators=(',', ':'))};</script>",
@@ -548,7 +588,9 @@ def serve(args: argparse.Namespace) -> int:
     host, port = server.server_address[:2]
     url = f"http://{host}:{port}/"
     print(f"kcs-dashboard reading {archive.data_dir}")
-    print(f"  {len(archive.symbols('1d'))} symbols with a 1d series; index builds on first request")
+    print(
+        f"  {len(archive.symbols('1d'))} symbols with a 1d series; index builds on first request"
+    )
     print(f"  {url}")
     print("  Ctrl-C to stop", flush=True)
     if args.open:
@@ -593,18 +635,33 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         description="Interactive candlestick and volume dashboard over the kline archive",
         epilog="Serve it and open the printed URL, or --export a single file to keep.",
     )
-    parser.add_argument("--data-dir", default=str(data.DEFAULT_DATA_DIR), help="archive root")
-    parser.add_argument("--host", default="127.0.0.1", help="interface to bind (default: %(default)s)")
-    parser.add_argument("--port", type=int, default=8765, help="port (default: %(default)s)")
-    parser.add_argument("--bars", type=int, default=DEFAULT_BARS, help="bars per request (default: %(default)s)")
-    parser.add_argument("--open", action="store_true", help="open the browser at the printed URL")
+    parser.add_argument(
+        "--data-dir", default=str(data.DEFAULT_DATA_DIR), help="archive root"
+    )
+    parser.add_argument(
+        "--host", default="127.0.0.1", help="interface to bind (default: %(default)s)"
+    )
+    parser.add_argument(
+        "--port", type=int, default=8765, help="port (default: %(default)s)"
+    )
+    parser.add_argument(
+        "--bars",
+        type=int,
+        default=DEFAULT_BARS,
+        help="bars per request (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--open", action="store_true", help="open the browser at the printed URL"
+    )
     parser.add_argument("--verbose", action="store_true", help="log every request")
     parser.add_argument(
         "--export",
         metavar="SYMBOL,TIMEFRAME",
         help="write one self-contained HTML file instead of serving (e.g. BTC-USDT,1h)",
     )
-    parser.add_argument("--out", help="where --export writes (default: SYMBOL_TIMEFRAME_dashboard.html)")
+    parser.add_argument(
+        "--out", help="where --export writes (default: SYMBOL_TIMEFRAME_dashboard.html)"
+    )
     return parser.parse_args(argv)
 
 

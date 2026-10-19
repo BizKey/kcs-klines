@@ -29,17 +29,24 @@ def archive_dir(tmp_path: Path) -> Path:
         ("SMALL-USDT", [10.0 - 0.01 * i for i in range(120)], 5_000.0),
     ):
         write_archive(
-            root, symbol, "1d", make_bars(series, start=START, step=DAY),
+            root,
+            symbol,
+            "1d",
+            make_bars(series, start=START, step=DAY),
             turnovers=[turnover] * len(series),
         )
-    write_archive(root, "BIG-USDT", "1h", make_bars([100.0] * 48, start=START, step=3600))
+    write_archive(
+        root, "BIG-USDT", "1h", make_bars([100.0] * 48, start=START, step=3600)
+    )
     return root
 
 
 @pytest.fixture
 def server(archive_dir: Path):
     """A real server on a free port, torn down afterwards."""
-    instance = dashboard.make_server(dashboard.Archive(archive_dir), page="<html>page</html>")
+    instance = dashboard.make_server(
+        dashboard.Archive(archive_dir), page="<html>page</html>"
+    )
     thread = threading.Thread(target=instance.serve_forever, daemon=True)
     thread.start()
     yield f"http://127.0.0.1:{instance.server_address[1]}"
@@ -68,7 +75,13 @@ def test_bars_payload_keeps_the_newest_bars_and_says_what_is_missing():
     assert payload["first"] == bars[-10].time
     assert payload["more"] is True, "there are older bars the page has not loaded"
     assert payload["c"] == [bar.close for bar in bars[-10:]]
-    assert len(payload["t"]) == len(payload["o"]) == len(payload["h"]) == len(payload["l"]) == 10
+    assert (
+        len(payload["t"])
+        == len(payload["o"])
+        == len(payload["h"])
+        == len(payload["l"])
+        == 10
+    )
     assert len(payload["v"]) == 10
 
 
@@ -82,7 +95,9 @@ def test_bars_payload_can_walk_backwards_from_a_timestamp():
 
 def test_bars_payload_of_an_empty_series_does_not_pretend():
     payload = dashboard.bars_payload([], bars_wanted=10)
-    assert payload["count"] == 0 and payload["first"] is None and payload["more"] is False
+    assert (
+        payload["count"] == 0 and payload["first"] is None and payload["more"] is False
+    )
 
 
 def test_the_index_is_one_row_per_symbol_sorted_by_turnover(archive_dir: Path):
@@ -102,11 +117,29 @@ def test_the_index_is_one_row_per_symbol_sorted_by_turnover(archive_dir: Path):
 
 def test_the_change_windows_are_bars_of_the_timeframe():
     """`1` is one bar; the rest are fixed stretches, spelled in bars of that timeframe."""
-    assert dashboard.change_bars("1h") == {"1": 1, "24h": 24, "7d": 168, "30d": 720, "1y": 8760}
-    assert dashboard.change_bars("1d") == {"1": 1, "24h": 1, "7d": 7, "30d": 30, "1y": 365}
+    assert dashboard.change_bars("1h") == {
+        "1": 1,
+        "24h": 24,
+        "7d": 168,
+        "30d": 720,
+        "1y": 8760,
+    }
+    assert dashboard.change_bars("1d") == {
+        "1": 1,
+        "24h": 1,
+        "7d": 7,
+        "30d": 30,
+        "1y": 365,
+    }
     # A weekly bar is longer than a day, so the 24h window is one bar, not zero.
     assert dashboard.change_bars("1w")["24h"] == 1
-    assert dashboard.change_bars("1mon") == {"1": 1, "24h": 1, "7d": 1, "30d": 1, "1y": 12}
+    assert dashboard.change_bars("1mon") == {
+        "1": 1,
+        "24h": 1,
+        "7d": 1,
+        "30d": 1,
+        "1y": 12,
+    }
 
 
 def test_a_window_longer_than_the_series_is_none_not_a_shorter_window():
@@ -135,11 +168,15 @@ def test_a_symbol_the_archive_does_not_have_is_refused(archive_dir: Path):
 def test_bars_are_cached_and_reloaded_when_a_file_changes(archive_dir: Path):
     archive = dashboard.Archive(archive_dir, cache_seconds=60.0)
     first = archive.bars("BIG-USDT", "1d")
-    assert archive.bars("BIG-USDT", "1d") is first, "a second read is served from memory"
+    assert archive.bars("BIG-USDT", "1d") is first, (
+        "a second read is served from memory"
+    )
     # Rewrite the series with one more bar, as a collector run would.
     longer = make_bars([100.0 + i for i in range(121)], start=START, step=DAY)
     write_archive(archive_dir, "BIG-USDT", "1d", longer)
-    assert len(archive.bars("BIG-USDT", "1d")) == 121, "a changed file invalidates the cache"
+    assert len(archive.bars("BIG-USDT", "1d")) == 121, (
+        "a changed file invalidates the cache"
+    )
 
 
 # --- the routes -------------------------------------------------------------
@@ -159,7 +196,11 @@ def test_the_index_route_answers_the_sidebar(server: str):
     status, body = fetch(server + "/api/index?timeframe=1d")
     assert status == 200
     assert body["timeframe"] == "1d"
-    assert [row["symbol"] for row in body["rows"]] == ["BIG-USDT", "MID-USDT", "SMALL-USDT"]
+    assert [row["symbol"] for row in body["rows"]] == [
+        "BIG-USDT",
+        "MID-USDT",
+        "SMALL-USDT",
+    ]
 
 
 def test_the_bars_route_returns_parallel_arrays(server: str):
@@ -178,10 +219,13 @@ def test_the_bars_route_can_walk_backwards(server: str):
     status, first = fetch(server + "/api/bars?symbol=BIG-USDT&timeframe=1d&bars=10")
     assert status == 200
     status, older = fetch(
-        server + f"/api/bars?symbol=BIG-USDT&timeframe=1d&bars=10&end={first['first'] - 1}"
+        server
+        + f"/api/bars?symbol=BIG-USDT&timeframe=1d&bars=10&end={first['first'] - 1}"
     )
     assert status == 200
-    assert older["last"] < first["first"], "the second page ends before the first begins"
+    assert older["last"] < first["first"], (
+        "the second page ends before the first begins"
+    )
     assert not set(older["t"]) & set(first["t"]), "and the pages do not overlap"
 
 
@@ -210,7 +254,9 @@ def test_the_export_route_embeds_the_data_in_the_page(archive_dir: Path):
     # An exporting server needs a page with both markers: the data one and the one the
     # library is inlined into.
     stub = (
-        "<html>" + dashboard.VENDOR_TAG + "<script>window.__DATA__ = null;</script></html>"
+        "<html>"
+        + dashboard.VENDOR_TAG
+        + "<script>window.__DATA__ = null;</script></html>"
     )
     instance = dashboard.make_server(dashboard.Archive(archive_dir), page=stub)
     thread = threading.Thread(target=instance.serve_forever, daemon=True)
@@ -231,11 +277,22 @@ def test_the_export_route_embeds_the_data_in_the_page(archive_dir: Path):
         thread.join(timeout=5)
 
 
-def test_the_export_writes_a_file_that_can_be_opened_anywhere(archive_dir: Path, tmp_path: Path):
+def test_the_export_writes_a_file_that_can_be_opened_anywhere(
+    archive_dir: Path, tmp_path: Path
+):
     out = tmp_path / "one.html"
-    code = dashboard.main([
-        "--data-dir", str(archive_dir), "--export", "BIG-USDT,1d", "--out", str(out), "--bars", "20",
-    ])
+    code = dashboard.main(
+        [
+            "--data-dir",
+            str(archive_dir),
+            "--export",
+            "BIG-USDT,1d",
+            "--out",
+            str(out),
+            "--bars",
+            "20",
+        ]
+    )
     assert code == 0
     page = out.read_text()
     assert page.startswith("<!DOCTYPE html>")
@@ -244,11 +301,20 @@ def test_the_export_writes_a_file_that_can_be_opened_anywhere(archive_dir: Path,
     assert data.iso(START) in page or "window.__DATA__ = null" not in page
 
 
-def test_exporting_a_symbol_that_is_not_there_fails_loudly(archive_dir: Path, tmp_path: Path):
+def test_exporting_a_symbol_that_is_not_there_fails_loudly(
+    archive_dir: Path, tmp_path: Path
+):
     with pytest.raises(KeyError, match="no 1d series"):
-        dashboard.main([
-            "--data-dir", str(archive_dir), "--export", "NOPE-USDT,1d", "--out", str(tmp_path / "x.html"),
-        ])
+        dashboard.main(
+            [
+                "--data-dir",
+                str(archive_dir),
+                "--export",
+                "NOPE-USDT,1d",
+                "--out",
+                str(tmp_path / "x.html"),
+            ]
+        )
 
 
 def test_an_asset_is_re_read_when_the_file_changes(tmp_path: Path):
@@ -259,25 +325,31 @@ def test_an_asset_is_re_read_when_the_file_changes(tmp_path: Path):
     path.write_text("one")
     asset = dashboard.Asset(path)
     assert asset.text() == "one"
-    assert asset.text() == "one"                       # cached while the file is unchanged
+    assert asset.text() == "one"  # cached while the file is unchanged
     path.write_text("two")
     os.utime(path, (path.stat().st_atime + 10, path.stat().st_mtime + 10))
     assert asset.text() == "two"
 
 
-def test_the_route_serves_the_current_file_without_a_restart(tmp_path: Path, archive_dir: Path):
+def test_the_route_serves_the_current_file_without_a_restart(
+    tmp_path: Path, archive_dir: Path
+):
     """The same thing through the route the browser actually hits."""
     import os
     import threading
 
     page = tmp_path / "page.html"
     page.write_text("<html>first build</html>")
-    handler = type("Bound", (dashboard.Handler,), {
-        "archive": dashboard.Archive(archive_dir),
-        "page_asset": dashboard.Asset(page),
-        "canvas_asset": dashboard.Asset(dashboard.CANVAS_PAGE),
-        "vendor_asset": dashboard.Asset(dashboard.VENDOR),
-    })
+    handler = type(
+        "Bound",
+        (dashboard.Handler,),
+        {
+            "archive": dashboard.Archive(archive_dir),
+            "page_asset": dashboard.Asset(page),
+            "canvas_asset": dashboard.Asset(dashboard.CANVAS_PAGE),
+            "vendor_asset": dashboard.Asset(dashboard.VENDOR),
+        },
+    )
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -288,7 +360,9 @@ def test_the_route_serves_the_current_file_without_a_restart(tmp_path: Path, arc
         page.write_text("<html>second build</html>")
         os.utime(page, (page.stat().st_atime + 10, page.stat().st_mtime + 10))
         status, body = fetch(base + "/")
-        assert (status, body) == (200, "<html>second build</html>"), "the server served a stale page"
+        assert (status, body) == (200, "<html>second build</html>"), (
+            "the server served a stale page"
+        )
     finally:
         server.shutdown()
         server.server_close()
@@ -300,7 +374,9 @@ def test_the_page_ships_with_the_package():
     assert dashboard.PAGE.is_file()
     page = dashboard.PAGE.read_text()
     assert "window.__DATA__ = null" in page, "the export marker the server replaces"
-    assert dashboard.VENDOR_TAG in page, "the marker the exporter inlines the library into"
+    assert dashboard.VENDOR_TAG in page, (
+        "the marker the exporter inlines the library into"
+    )
     assert "createChart" in page and "fetch(" in page
 
 
@@ -314,8 +390,12 @@ def test_the_canvas_fallback_page_ships_too():
 def test_the_vendored_library_is_present_and_carries_its_license():
     assert dashboard.VENDOR.is_file()
     source = dashboard.vendored_library()
-    assert len(source) > 100_000, "a truncated bundle would fail in the browser, not here"
-    assert "Apache License 2.0" in source[:400], "the license banner has to travel with it"
+    assert len(source) > 100_000, (
+        "a truncated bundle would fail in the browser, not here"
+    )
+    assert "Apache License 2.0" in source[:400], (
+        "the license banner has to travel with it"
+    )
     assert "window.LightweightCharts" in source
 
 
@@ -331,17 +411,31 @@ def test_the_page_only_uses_library_apis_the_bundle_exports():
     used = set(re.findall(r"\bLWC\.([A-Za-z_][A-Za-z0-9_]*)", page))
     assert used, "the page should be using the library"
     exports = dashboard.vendored_library()[-6000:]
-    missing = sorted(name for name in used if not re.search(rf"\b{name}\s*[:(]", exports))
+    missing = sorted(
+        name for name in used if not re.search(rf"\b{name}\s*[:(]", exports)
+    )
     assert not missing, f"the page uses {missing}, which this bundle does not export"
 
 
 #: The library methods this page drives. They cannot be executed here — there is no
 #: browser and no DOM — so the contract is checked by name instead, against the bundle.
 LIBRARY_METHODS = (
-    "addSeries", "applyOptions", "setData", "takeScreenshot", "panes", "paneIndex",
-    "setPreserveEmptyPane", "setHeight", "priceScale", "timeScale", "setVisibleRange",
-    "setVisibleLogicalRange", "getVisibleLogicalRange", "fitContent",
-    "subscribeCrosshairMove", "subscribeVisibleLogicalRangeChange",
+    "addSeries",
+    "applyOptions",
+    "setData",
+    "takeScreenshot",
+    "panes",
+    "paneIndex",
+    "setPreserveEmptyPane",
+    "setHeight",
+    "priceScale",
+    "timeScale",
+    "setVisibleRange",
+    "setVisibleLogicalRange",
+    "getVisibleLogicalRange",
+    "fitContent",
+    "subscribeCrosshairMove",
+    "subscribeVisibleLogicalRangeChange",
 )
 
 
@@ -350,7 +444,9 @@ def test_every_library_method_the_page_calls_exists_in_the_bundle():
     page = dashboard.PAGE.read_text()
     bundle = dashboard.vendored_library()
     used = [name for name in LIBRARY_METHODS if f".{name}(" in page]
-    assert len(used) >= 10, "the page should be driving the library, not a couple of calls"
+    assert len(used) >= 10, (
+        "the page should be driving the library, not a couple of calls"
+    )
     missing = [name for name in used if not re.search(rf"\b{name}\s*[:(]", bundle)]
     assert not missing, f"the page calls {missing}, which this bundle does not provide"
 
@@ -400,7 +496,9 @@ def test_the_stats_route_answers_from_its_cache(archive_dir: Path, monkeypatch):
 
 
 def test_the_vendor_route_serves_the_library(server: str):
-    with urllib.request.urlopen(server + "/vendor/lightweight-charts.js", timeout=10) as response:
+    with urllib.request.urlopen(
+        server + "/vendor/lightweight-charts.js", timeout=10
+    ) as response:
         body = response.read().decode()
         assert response.status == 200
         assert response.headers.get_content_type() == "text/javascript"

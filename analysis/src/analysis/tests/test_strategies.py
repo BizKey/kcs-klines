@@ -21,7 +21,14 @@ from ..data import SECONDS_PER_YEAR
 from ..data import Bar
 from ..engine import Costs, run_backtest
 from ..metrics import macd, sma
-from ..strategies import DonchianBreakout, MacdTrend, RsiReversion, ScaledStrategy, SmaReversion, Tsmom
+from ..strategies import (
+    DonchianBreakout,
+    MacdTrend,
+    RsiReversion,
+    ScaledStrategy,
+    SmaReversion,
+    Tsmom,
+)
 from ..strategies.base import Strategy
 from .conftest import make_bars, ramp, wavy
 
@@ -159,13 +166,23 @@ def test_strategy_modules_import_the_registry_not_the_package_root():
     """`from . import register` inside a strategy module is a circular import."""
     import analysis.strategies as package
 
-    modules = [p for p in pathlib.Path(package.__file__).parent.glob("*.py") if p.name != "__init__.py"]
+    modules = [
+        p
+        for p in pathlib.Path(package.__file__).parent.glob("*.py")
+        if p.name != "__init__.py"
+    ]
     assert modules
     for module in modules:
         source = module.read_text()
-        assert "from . import" not in source, f"{module.name} would deadlock the package import"
+        assert "from . import" not in source, (
+            f"{module.name} would deadlock the package import"
+        )
         assert "from .. import" not in source, module.name
-        assert "from ..data import" in source or "from .base import" in source or module.name == "registry.py"
+        assert (
+            "from ..data import" in source
+            or "from .base import" in source
+            or module.name == "registry.py"
+        )
 
 
 def test_the_registry_module_can_be_imported_on_its_own():
@@ -190,14 +207,18 @@ def test_targets_never_peek_at_later_bars():
         sample_strategy(name) for name in available()
     ]:
         original = strategy.targets(bars)
-        assert any(original), f"{strategy.slug} never signals, so the check would be vacuous"
+        assert any(original), (
+            f"{strategy.slug} never signals, so the check would be vacuous"
+        )
         # A sample of bars is enough: rewriting every single one would make this
         # O(bars^2) per strategy for no extra signal.
         stride = max(1, len(bars) // 25)
         for changed_index in range(1, len(bars), stride):
             nudged = list(bars)
             bar = bars[changed_index]
-            nudged[changed_index] = Bar(bar.time, bar.open, bar.high, bar.low, bar.close * 10, bar.volume)
+            nudged[changed_index] = Bar(
+                bar.time, bar.open, bar.high, bar.low, bar.close * 10, bar.volume
+            )
             after = strategy.targets(nudged)
             # A target at bar i may only depend on bars 0..i, so rewriting bar
             # `changed_index` must leave every earlier target untouched.
@@ -256,7 +277,9 @@ def test_reversion_is_the_mirror_of_the_trend_rule():
     trend = SmaTrend(window=5).targets(bars)
     reversion = SmaReversion(window=5).targets(bars)
     average = sma([b.close for b in bars], 5)
-    for close, mean, up, down in zip([b.close for b in bars], average, trend, reversion):
+    for close, mean, up, down in zip(
+        [b.close for b in bars], average, trend, reversion
+    ):
         if mean is None or close == mean:
             assert down == 0.0
         else:
@@ -269,7 +292,9 @@ def test_reversion_long_short_is_the_negated_trend_long_short():
     trend = SmaTrendLongShort(window=5).targets(bars)
     reversion = SmaReversion(window=5, mode="long-short").targets(bars)
     average = sma([b.close for b in bars], 5)
-    for close, mean, up, down in zip([b.close for b in bars], average, trend, reversion):
+    for close, mean, up, down in zip(
+        [b.close for b in bars], average, trend, reversion
+    ):
         if mean is None or close == mean:
             assert down == 0.0
         else:
@@ -327,7 +352,9 @@ def test_macd_is_long_above_its_signal_line_and_flat_below():
 
 def test_macd_long_short_sells_below_the_signal_line():
     bars = macd_bars()
-    short_targets = MacdTrend(fast=12, slow=26, signal=9, mode="long-short").targets(bars)
+    short_targets = MacdTrend(fast=12, slow=26, signal=9, mode="long-short").targets(
+        bars
+    )
     line, signal, _ = macd([b.close for b in bars], 12, 26, 9)
     for m, s, target in zip(line, signal, short_targets):
         if m is None or s is None or m == s:
@@ -366,7 +393,12 @@ def test_macd_metadata_slugs_and_validation():
     assert MacdTrend().slug == "macd12-26-9"
     assert MacdTrend(mode="long-short").slug == "macd12-26-9-ls"
     assert MacdTrend(fast=5, slow=13, signal=4).slug == "macd5-13-4"
-    assert MacdTrend().params == {"fast": 12, "slow": 26, "signal": 9, "mode": "long-only"}
+    assert MacdTrend().params == {
+        "fast": 12,
+        "slow": 26,
+        "signal": 9,
+        "mode": "long-only",
+    }
     assert "MACD(12, 26, 9)" in MacdTrend().describe()
     assert "always in the market" in MacdTrend(mode="long-short").describe()
 
@@ -382,7 +414,12 @@ def test_macd_is_registered_under_both_names():
     assert get_strategy("macd").slug == "macd12-26-9"
     assert get_strategy("macd-ls").slug == "macd12-26-9-ls"
     assert get_strategy("macd", fast=5, slow=13, signal=4).slug == "macd5-13-4"
-    assert parameters("macd") == {"fast": 12, "slow": 26, "signal": 9, "mode": "long-only"}
+    assert parameters("macd") == {
+        "fast": 12,
+        "slow": 26,
+        "signal": 9,
+        "mode": "long-only",
+    }
     assert sweep_parameter("macd") == "signal"
     assert "MACD" in "\n".join(describe_registry())
 
@@ -410,7 +447,9 @@ def test_tsmom_decides_on_the_first_bar_of_each_grid_bucket():
     period = 50 * 3600
     targets = Tsmom(lookback=10, rebalance=50).targets(bars)
     bucket_starts = [
-        i for i in range(11, len(bars)) if bars[i].time // period != bars[i - 1].time // period
+        i
+        for i in range(11, len(bars))
+        if bars[i].time // period != bars[i - 1].time // period
     ]
     decisions = {i for i in range(11, len(bars)) if targets[i] != targets[i - 1]}
     assert decisions
@@ -455,7 +494,9 @@ def test_tsmom_threshold_skips_weak_signals():
     loose = Tsmom(lookback=20, rebalance=40).targets(bars)
     strict = Tsmom(lookback=20, rebalance=40, threshold=0.5).targets(bars)
     assert sum(1 for t in strict if t) <= sum(1 for t in loose if t)
-    assert any(strict) or sum(1 for t in strict if t) == 0  # may legitimately be always flat
+    assert (
+        any(strict) or sum(1 for t in strict if t) == 0
+    )  # may legitimately be always flat
 
 
 def test_tsmom_long_short_takes_both_sides():
@@ -551,7 +592,10 @@ def test_donchian_long_short_shorts_a_new_low():
 
 def test_donchian_metadata_and_validation():
     assert DonchianBreakout(entry=20, exit_window=10).slug == "donchian20-10"
-    assert DonchianBreakout(entry=20, exit_window=10, min_hold=5).slug == "donchian20-10-h5"
+    assert (
+        DonchianBreakout(entry=20, exit_window=10, min_hold=5).slug
+        == "donchian20-10-h5"
+    )
     assert DonchianBreakout(mode="long-short").slug == "donchian20-10-ls"
     assert "20-bar high" in DonchianBreakout().describe()
     with pytest.raises(ValueError, match="at least 2"):
@@ -566,7 +610,11 @@ def test_donchian_metadata_and_validation():
 
 
 def test_rsi_reversion_buys_oversold_and_leaves_on_the_exit_level():
-    closes = [100.0] * 15 + [100.0 - 3 * i for i in range(1, 9)] + [80.0, 85.0, 90.0, 95.0, 100.0]
+    closes = (
+        [100.0] * 15
+        + [100.0 - 3 * i for i in range(1, 9)]
+        + [80.0, 85.0, 90.0, 95.0, 100.0]
+    )
     bars = make_bars(closes)
     strategy = RsiReversion(window=2, oversold=10.0, exit_level=50.0, max_hold=20)
     targets = strategy.targets(bars)
@@ -581,7 +629,9 @@ def test_rsi_reversion_time_stop_closes_a_losing_trade():
     # A long, slow decline keeps RSI low, so only `max_hold` can end the trade.
     closes = [100.0] * 15 + [100.0 - 0.5 * i for i in range(1, 60)]
     bars = make_bars(closes)
-    targets = RsiReversion(window=3, oversold=20.0, exit_level=85.0, overbought=95.0, max_hold=4).targets(bars)
+    targets = RsiReversion(
+        window=3, oversold=20.0, exit_level=85.0, overbought=95.0, max_hold=4
+    ).targets(bars)
     entry = targets.index(1.0)
     assert targets[entry : entry + 4] == [1.0] * 4
     assert targets[entry + 4] == 0.0
@@ -650,7 +700,9 @@ def test_vol_target_respects_the_cap_and_keeps_the_sign():
 
 def test_vol_target_stays_unscaled_until_it_has_enough_observations():
     bars = alternating_bars(30)
-    sized = ScaledStrategy(SmaTrend(window=2), target_vol=0.1, vol_window=100, min_observations=20)
+    sized = ScaledStrategy(
+        SmaTrend(window=2), target_vol=0.1, vol_window=100, min_observations=20
+    )
     scales = sized.scales(bars)
     assert scales[:20] == [1.0] * 20
     assert scales[20] < 1.0  # high volatility, low budget -> scaled down
@@ -699,7 +751,9 @@ def test_vol_target_composites_are_registered():
 def test_a_vol_targeted_run_still_reconciles_its_trade_book():
     bars = alternating_bars(600)
     sized = ScaledStrategy(SmaTrend(window=20), target_vol=0.2, vol_window=50)
-    result = run_backtest(bars, sized.targets(bars), "1h", Costs(fee_per_side=0.001), label=sized.slug)
+    result = run_backtest(
+        bars, sized.targets(bars), "1h", Costs(fee_per_side=0.001), label=sized.slug
+    )
     assert result.bookkeeping_error < 1e-9
     assert result.exposure < 1.0  # never fully invested at this budget
 
@@ -718,12 +772,16 @@ def test_the_blend_has_horizons_of_one_two_four_and_eight_weeks():
 def test_the_blend_needs_a_majority_of_its_horizons():
     """Horizons of 1, 2, 4 and 8 bars: three positive is long, two is not."""
     blend = get_strategy("tsmom-blend", base=1, horizons=4, rebalance=1)
-    three_up = make_bars([100.0, 140.0, 100.0, 100.0, 100.0, 100.0, 100.0, 110.0, 120.0, 130.0])
+    three_up = make_bars(
+        [100.0, 140.0, 100.0, 100.0, 100.0, 100.0, 100.0, 110.0, 120.0, 130.0]
+    )
     assert blend.scores(three_up)[7] is None  # the longest horizon has no history yet
     assert blend.scores(three_up)[-1] == pytest.approx(0.5)
     assert blend.targets(three_up)[-1] == 1.0
 
-    two_up = make_bars([200.0, 200.0, 130.0, 130.0, 160.0, 160.0, 90.0, 90.0, 90.0, 110.0])
+    two_up = make_bars(
+        [200.0, 200.0, 130.0, 130.0, 160.0, 160.0, 90.0, 90.0, 90.0, 110.0]
+    )
     assert blend.scores(two_up)[-1] == 0.0  # a coin toss
     assert blend.targets(two_up)[-1] == 0.0  # and a coin toss stays in cash
 
@@ -731,16 +789,24 @@ def test_the_blend_needs_a_majority_of_its_horizons():
 def test_the_blend_and_the_single_rule_share_their_decision_grid():
     """Same scores in, same decision dates out — the grid lives in one place."""
     bars = make_bars(wavy(600))
-    scores = [None if i < 200 else (1.0 if i % 200 < 100 else -1.0) for i in range(len(bars))]
+    scores = [
+        None if i < 200 else (1.0 if i % 200 < 100 else -1.0) for i in range(len(bars))
+    ]
     blend_targets = on_decision_grid(scores, bars, 168)
     single = get_strategy("tsmom", lookback=200, rebalance=168)
     # the single rule reads a different score, but off the same grid: every change
     # it makes must also be a grid point the helper picked
     single_targets = single.targets(bars)
-    single_changes = {i for i in range(1, len(bars)) if single_targets[i] != single_targets[i - 1]}
-    helper_changes = {i for i in range(1, len(bars)) if blend_targets[i] != blend_targets[i - 1]}
+    single_changes = {
+        i for i in range(1, len(bars)) if single_targets[i] != single_targets[i - 1]
+    }
+    helper_changes = {
+        i for i in range(1, len(bars)) if blend_targets[i] != blend_targets[i - 1]
+    }
     assert helper_changes <= {i for i in range(1, len(bars))}
-    assert all(bars[i].time % (168 * 3600) == 0 for i in single_changes | helper_changes)
+    assert all(
+        bars[i].time % (168 * 3600) == 0 for i in single_changes | helper_changes
+    )
 
 
 def test_the_blend_rejects_a_single_horizon():

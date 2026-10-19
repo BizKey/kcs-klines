@@ -74,6 +74,8 @@ def auto_max_weight(top: int) -> float:
     than by decision.
     """
     return max(DEFAULT_MAX_WEIGHT, 2.0 / max(top, 1))
+
+
 #: How stale a close may be before a symbol counts as gone from the universe.
 MAX_AGE_DAYS = 3
 
@@ -104,11 +106,15 @@ def read_series(data_dir: Path | str, symbol: str, timeframe: str) -> Series:
 
     files = data.series_files(data_dir, symbol, timeframe)
     if not files:
-        raise FileNotFoundError(f"no parquet files for {symbol} {timeframe} under {data_dir}")
+        raise FileNotFoundError(
+            f"no parquet files for {symbol} {timeframe} under {data_dir}"
+        )
     closes: dict[int, tuple[float, float]] = {}
     for path in files:
         table = pq.read_table(path, columns=["time", "close", "turnover"]).to_pydict()
-        for moment, close, turnover in zip(table["time"], table["close"], table["turnover"]):
+        for moment, close, turnover in zip(
+            table["time"], table["close"], table["turnover"]
+        ):
             closes[moment] = (close, turnover)
     ordered = sorted(closes)
     return Series(
@@ -150,7 +156,12 @@ def align(series: Series, calendar: list[int], max_age: int) -> Aligned:
         prices[index] = last_close
         if first_index is None and not math.isnan(last_close):
             first_index = index
-    return Aligned(symbol=series.symbol, prices=prices, turnovers=turnovers, first_index=first_index)
+    return Aligned(
+        symbol=series.symbol,
+        prices=prices,
+        turnovers=turnovers,
+        first_index=first_index,
+    )
 
 
 @dataclass
@@ -237,7 +248,9 @@ class RiskParityResult:
         """How often the book held nothing at all — the cost of a trend rule."""
         if not self.invested_by_bar:
             return 0.0
-        return sum(1 for value in self.invested_by_bar if value <= 0.0) / len(self.invested_by_bar)
+        return sum(1 for value in self.invested_by_bar if value <= 0.0) / len(
+            self.invested_by_bar
+        )
 
     @property
     def holdings_mean(self) -> float:
@@ -277,7 +290,9 @@ class RiskParityResult:
             "performance": self.performance.as_dict(),
             "benchmark_equal_weight": self.benchmark.as_dict(),
             "benchmark_buy_and_hold": (
-                {"label": self.buy_hold_label, **self.buy_hold.as_dict()} if self.buy_hold else None
+                {"label": self.buy_hold_label, **self.buy_hold.as_dict()}
+                if self.buy_hold
+                else None
             ),
             "costs": {
                 "fee_per_side": self.costs.fee_per_side,
@@ -337,8 +352,13 @@ def restrict(
     if result.buy_hold_equity:
         hold_base = result.buy_hold_equity[inside[0]]
         if hold_base <= 0:
-            raise ValueError("the buy & hold reference was worth nothing when the window opened")
-        hold = [(result.buy_hold_equity[i] / hold_base) * (1.0 - result.costs.rate) for i in inside]
+            raise ValueError(
+                "the buy & hold reference was worth nothing when the window opened"
+            )
+        hold = [
+            (result.buy_hold_equity[i] / hold_base) * (1.0 - result.costs.rate)
+            for i in inside
+        ]
     per_year = data.bars_per_year(result.timeframe)
     # A window is its own timeline, so every index the result carries has to be
     # relative to it: markers, rows and the equity column all address the window.
@@ -390,7 +410,9 @@ def restrict(
         trend_exits=exits,
         buy_hold_equity=hold,
         buy_hold_label=result.buy_hold_label,
-        buy_hold=metrics.performance(hold, per_year, timestamps=times) if hold else None,
+        buy_hold=metrics.performance(hold, per_year, timestamps=times)
+        if hold
+        else None,
         window_text=text,
         warnings=list(result.warnings),
     )
@@ -400,7 +422,13 @@ def restrict(
     windowed.warnings = [
         w
         for w in result.warnings
-        if not w.startswith(("no symbol had enough history", "the budget asked", "the trend rule emptied"))
+        if not w.startswith(
+            (
+                "no symbol had enough history",
+                "the budget asked",
+                "the trend rule emptied",
+            )
+        )
     ]
     if windowed.gated_out:
         windowed.warnings.append(
@@ -413,7 +441,10 @@ def restrict(
             f"no symbol had enough history on {len(inside_skips)} rebalance(s) inside the window: "
             "the book was in cash on those days"
         )
-    if result.vol_budget is not None and windowed.performance.ann_vol > result.vol_budget * 1.5:
+    if (
+        result.vol_budget is not None
+        and windowed.performance.ann_vol > result.vol_budget * 1.5
+    ):
         windowed.warnings.append(
             f"the budget asked for {result.vol_budget:.0%} a year and the window delivered "
             f"{windowed.performance.ann_vol:.0%}: trailing volatility is a forecast, not a promise"
@@ -450,13 +481,19 @@ def trailing_volatility(prices: list[float], bars_per_year: float) -> float:
     scaled by `sqrt(bars_per_year)`. Same convention as `metrics.ann_vol`, so a
     window quoted here and the reported volatility of the same window agree.
     """
-    returns = [prices[i] / prices[i - 1] - 1.0 for i in range(1, len(prices)) if prices[i - 1] > 0]
+    returns = [
+        prices[i] / prices[i - 1] - 1.0
+        for i in range(1, len(prices))
+        if prices[i - 1] > 0
+    ]
     if len(returns) < 3:
         return float("nan")
     return st.pstdev(returns) * math.sqrt(bars_per_year)
 
 
-def select_universe(aligned: dict[str, Aligned], index: int, top: int, lookback: int, min_history: int):
+def select_universe(
+    aligned: dict[str, Aligned], index: int, top: int, lookback: int, min_history: int
+):
     """The most traded symbols that existed for long enough, by past data only."""
     scored = []
     for symbol, row in aligned.items():
@@ -481,7 +518,9 @@ def cap_weights(weights: dict[str, float], max_weight: float) -> dict[str, float
         return weights
     weights = dict(weights)
     for _ in range(10):
-        over = [symbol for symbol, weight in weights.items() if weight > max_weight + 1e-12]
+        over = [
+            symbol for symbol, weight in weights.items() if weight > max_weight + 1e-12
+        ]
         if not over:
             break
         excess = sum(weights[symbol] - max_weight for symbol in over)
@@ -509,7 +548,9 @@ def weights_for(
     if not universe:
         return {}
     if scheme == "equal":
-        return cap_weights({symbol: 1.0 / len(universe) for symbol in universe}, max_weight)
+        return cap_weights(
+            {symbol: 1.0 / len(universe) for symbol in universe}, max_weight
+        )
     raw: dict[str, float] = {}
     for symbol in universe:
         window = [
@@ -523,7 +564,9 @@ def weights_for(
     if not raw:
         return {}
     total = sum(raw.values())
-    return cap_weights({symbol: amount / total for symbol, amount in raw.items()}, max_weight)
+    return cap_weights(
+        {symbol: amount / total for symbol, amount in raw.items()}, max_weight
+    )
 
 
 def _buy_and_hold_curve(
@@ -584,7 +627,9 @@ def run_riskparity(
     if top < 1:
         raise ValueError("top must be at least 1 symbol")
     if lookback < 2 or vol_window < 3 or rebalance < 1 or min_history < 0:
-        raise ValueError("lookback needs 2+ bars, vol_window 3+, rebalance 1+, min_history 0+")
+        raise ValueError(
+            "lookback needs 2+ bars, vol_window 3+, rebalance 1+, min_history 0+"
+        )
     if trend is not None and trend < 1:
         raise ValueError("trend needs 1+ bars, or None to switch the rule off")
     if len(calendar) < 3:
@@ -595,7 +640,7 @@ def run_riskparity(
 
     hold_curve, hold_label = _buy_and_hold_curve(aligned, calendar, buy_hold, costs)
     weights: dict[str, float] = {}
-    passive: dict[str, float] = {}          # the same names, equal weight, no budget
+    passive: dict[str, float] = {}  # the same names, equal weight, no budget
     pending: dict[str, float] | None = None
     pending_passive: dict[str, float] | None = None
     pending_info: tuple[int, list[str], float, int] | None = None
@@ -644,7 +689,9 @@ def run_riskparity(
         passive_total = (1.0 - sum(passive.values())) + sum(passive_grown.values())
         benchmark.append(benchmark[-1] * passive_total)
         if passive_total > 0:
-            passive = {symbol: value / passive_total for symbol, value in passive_grown.items()}
+            passive = {
+                symbol: value / passive_total for symbol, value in passive_grown.items()
+            }
 
         # 2a. a name that lost its trend yesterday is sold at this close, before the
         # rebalance that would have re-weighted it: its share goes to cash, not to the
@@ -712,19 +759,31 @@ def run_riskparity(
         if index % rebalance:
             # between rebalances the only thing that acts is the trend rule
             if trend is not None:
-                losing = [s for s in weights if not passes_trend(aligned[s], index, trend)]
+                losing = [
+                    s for s in weights if not passes_trend(aligned[s], index, trend)
+                ]
                 if losing:
                     pending_exits = losing
             invested_by_bar.append(sum(weights.values()))
             continue
-        universe, candidates = select_universe(aligned, index, top, lookback, min_history)
+        universe, candidates = select_universe(
+            aligned, index, top, lookback, min_history
+        )
         book_universe = universe
         if trend is not None:
-            book_universe = [s for s in universe if passes_trend(aligned[s], index, trend)]
+            book_universe = [
+                s for s in universe if passes_trend(aligned[s], index, trend)
+            ]
             if not book_universe:
                 gated_out.append(index)
         targets = weights_for(
-            book_universe, aligned, index, weight_scheme, vol_window, bars_per_year, max_weight
+            book_universe,
+            aligned,
+            index,
+            weight_scheme,
+            vol_window,
+            bars_per_year,
+            max_weight,
         )
         # The benchmark never passes through the trend gate, and it re-equalises on the
         # grid whether or not the book had anything to buy: gating it too would fold the
@@ -744,7 +803,9 @@ def run_riskparity(
                 if equity[k - 1] > 0
             ]
             # the same estimator the toolkit reports: simple returns, pstdev, sqrt(bars/year)
-            realised = st.pstdev(window) * math.sqrt(bars_per_year) if len(window) > 3 else 0.0
+            realised = (
+                st.pstdev(window) * math.sqrt(bars_per_year) if len(window) > 3 else 0.0
+            )
             if realised > 0:
                 scale = min(1.0, vol_budget / realised)  # de-risk only, never lever up
         pending = {symbol: weight * scale for symbol, weight in targets.items()}
@@ -853,7 +914,9 @@ def render(result: RiskParityResult) -> str:
             f"{result.trend_bars} bar(s) earlier; a name that loses its trend is sold on the "
             f"next close and can only return at a rebalance — {len(result.trend_exits)} exits"
         )
-    add("execution   : decided on a close, applied on the next close; costs on drifted weights")
+    add(
+        "execution   : decided on a close, applied on the next close; costs on drifted weights"
+    )
     add("")
     add(
         f"rebalances  : {len(result.rebalances)}, ~{result.holdings_mean:.1f} holdings, "
@@ -870,7 +933,9 @@ def render(result: RiskParityResult) -> str:
         last = result.rebalances[-1]
         held = sorted(last.weights.items(), key=lambda item: -item[1])
         shown = ", ".join(f"{symbol} {weight:.1%}" for symbol, weight in held[:8])
-        add(f"last book   : {data.iso(last.time)} UTC — {shown}{'…' if len(held) > 8 else ''}")
+        add(
+            f"last book   : {data.iso(last.time)} UTC — {shown}{'…' if len(held) > 8 else ''}"
+        )
         add(f"              {last.invested:.0%} invested, scale {last.scale:.2f}")
     if result.trend_exits:
         recent = result.trend_exits[-1]
@@ -880,26 +945,55 @@ def render(result: RiskParityResult) -> str:
         )
     add("")
     hold_column = f"buy & hold {result.buy_hold_label}" if result.buy_hold else None
-    add(f"{'metric':<26}{'portfolio':>18}{'equal-weight hold':>20}"
-        + (f"{hold_column:>22}" if hold_column else ""))
+    add(
+        f"{'metric':<26}{'portfolio':>18}{'equal-weight hold':>20}"
+        + (f"{hold_column:>22}" if hold_column else "")
+    )
     add("-" * (64 + (22 if hold_column else 0)))
 
     def row(label: str, left: str, right: str, third: str = "") -> None:
-        add(f"{label:<26}{left:>18}{right:>20}" + (f"{third:>22}" if hold_column else ""))
+        add(
+            f"{label:<26}{left:>18}{right:>20}"
+            + (f"{third:>22}" if hold_column else "")
+        )
 
     hold = result.buy_hold
-    row("total return", pct(result.performance.total_return), pct(result.benchmark.total_return),
-        pct(hold.total_return) if hold else "")
-    row("CAGR", pct(result.performance.cagr), pct(result.benchmark.cagr),
-        pct(hold.cagr) if hold else "")
-    row("annualised vol", pct(result.performance.ann_vol), pct(result.benchmark.ann_vol),
-        pct(hold.ann_vol) if hold else "")
-    row("Sharpe (rf=0)", f"{result.performance.sharpe:.2f}", f"{result.benchmark.sharpe:.2f}",
-        f"{hold.sharpe:.2f}" if hold else "")
-    row("max drawdown", pct(result.performance.max_dd), pct(result.benchmark.max_dd),
-        pct(hold.max_dd) if hold else "")
-    row("years", f"{result.performance.years:.2f}", f"{result.benchmark.years:.2f}",
-        f"{hold.years:.2f}" if hold else "")
+    row(
+        "total return",
+        pct(result.performance.total_return),
+        pct(result.benchmark.total_return),
+        pct(hold.total_return) if hold else "",
+    )
+    row(
+        "CAGR",
+        pct(result.performance.cagr),
+        pct(result.benchmark.cagr),
+        pct(hold.cagr) if hold else "",
+    )
+    row(
+        "annualised vol",
+        pct(result.performance.ann_vol),
+        pct(result.benchmark.ann_vol),
+        pct(hold.ann_vol) if hold else "",
+    )
+    row(
+        "Sharpe (rf=0)",
+        f"{result.performance.sharpe:.2f}",
+        f"{result.benchmark.sharpe:.2f}",
+        f"{hold.sharpe:.2f}" if hold else "",
+    )
+    row(
+        "max drawdown",
+        pct(result.performance.max_dd),
+        pct(result.benchmark.max_dd),
+        pct(hold.max_dd) if hold else "",
+    )
+    row(
+        "years",
+        f"{result.performance.years:.2f}",
+        f"{result.benchmark.years:.2f}",
+        f"{hold.years:.2f}" if hold else "",
+    )
     add("")
     row(
         "final equity",
@@ -953,7 +1047,9 @@ def write_equity(path: Path, result: RiskParityResult) -> None:
                         if result.buy_hold_equity
                         else []
                     ),
-                    data.iso(by_time[fill.time].time) if fill and fill.time in by_time else "",
+                    data.iso(by_time[fill.time].time)
+                    if fill and fill.time in by_time
+                    else "",
                     # every bar, not only the rebalance rows: a trend rule changes the
                     # exposure in between, and the column is where a reader looks for it
                     f"{result.invested_by_bar[index]:.6f}",
@@ -1030,7 +1126,9 @@ def write_chart(path: Path, result: RiskParityResult) -> None:
             report.MARKER_SAME: ("size unchanged", "grey"),
             report.MARKER_FLIP: ("trend exit", "purple"),
         },
-        marker_title="rebalances and trend exits" if result.trend_exits else "rebalances",
+        marker_title="rebalances and trend exits"
+        if result.trend_exits
+        else "rebalances",
         levels=levels,
     )
 
@@ -1049,24 +1147,39 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--timeframe", default="1d", help="bar size (default: %(default)s)")
-    parser.add_argument("--top", type=int, default=10, help="how many symbols to hold at most")
+    parser.add_argument(
+        "--timeframe", default="1d", help="bar size (default: %(default)s)"
+    )
+    parser.add_argument(
+        "--top", type=int, default=10, help="how many symbols to hold at most"
+    )
     parser.add_argument(
         "--min-history",
         default="1y",
         help="ignore symbols younger than this, e.g. 3y, 180d (default: %(default)s)",
     )
-    parser.add_argument("--lookback", default="30d", help="turnover window (default: %(default)s)")
-    parser.add_argument("--rebalance", default="30d", help="how often to re-select (default: %(default)s)")
     parser.add_argument(
-        "--weight", default="equal", choices=WEIGHT_SCHEMES, help="weighting scheme (default: %(default)s)"
+        "--lookback", default="30d", help="turnover window (default: %(default)s)"
+    )
+    parser.add_argument(
+        "--rebalance",
+        default="30d",
+        help="how often to re-select (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--weight",
+        default="equal",
+        choices=WEIGHT_SCHEMES,
+        help="weighting scheme (default: %(default)s)",
     )
     parser.add_argument(
         "--vol-budget",
         default="0.4",
         help="annualised volatility target, or `none` to hold the book undiluted",
     )
-    parser.add_argument("--vol-window", default="30d", help="volatility window (default: %(default)s)")
+    parser.add_argument(
+        "--vol-window", default="30d", help="volatility window (default: %(default)s)"
+    )
     parser.add_argument(
         "--trend",
         default="none",
@@ -1089,21 +1202,39 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         metavar="PERIOD",
         help="report only the last stretch, e.g. 1y, 6mon, 90d (the book still sees all the "
-             "history before it)",
+        "history before it)",
     )
-    parser.add_argument("--calendar", default=DEFAULT_CALENDAR, help="symbol whose bars define the schedule")
+    parser.add_argument(
+        "--calendar",
+        default=DEFAULT_CALENDAR,
+        help="symbol whose bars define the schedule",
+    )
     parser.add_argument(
         "--exclude-equities",
         action="store_true",
         help="drop tokenised equities (AAPLX, TSLAX, ...) from the universe; they trade "
         "like pairs but follow stocks, and the report names any it kept",
     )
-    parser.add_argument("--fee", type=float, default=0.001, help="commission per side (default: %(default)s)")
-    parser.add_argument("--slippage", type=float, default=0.0, help="extra cost per side (default: %(default)s)")
+    parser.add_argument(
+        "--fee",
+        type=float,
+        default=0.001,
+        help="commission per side (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--slippage",
+        type=float,
+        default=0.0,
+        help="extra cost per side (default: %(default)s)",
+    )
     parser.add_argument("--data-dir", type=Path, default=DATA_DIR)
     parser.add_argument("--out-dir", type=Path, default=OUT_DIR)
-    parser.add_argument("--no-artifacts", action="store_true", help="print only, write nothing")
-    parser.add_argument("--json", action="store_true", help="also write the summary as JSON")
+    parser.add_argument(
+        "--no-artifacts", action="store_true", help="print only, write nothing"
+    )
+    parser.add_argument(
+        "--json", action="store_true", help="also write the summary as JSON"
+    )
     return parser.parse_args(argv)
 
 
@@ -1119,7 +1250,11 @@ def bars_for(spec: str, timeframe: str, *, allow_none: bool = False) -> int | No
         raise SystemExit(str(exc)) from None
     if seconds == 0:
         return 0  # `0d` means "no filter", which is what the age flag wants
-    step = 30 * 86400 if timeframe in data.CALENDAR_TIMEFRAMES else data.interval_seconds(timeframe)
+    step = (
+        30 * 86400
+        if timeframe in data.CALENDAR_TIMEFRAMES
+        else data.interval_seconds(timeframe)
+    )
     bars = round(seconds / step)
     if bars < 1:
         raise SystemExit(
@@ -1135,7 +1270,9 @@ def budget_for(spec: str) -> float | None:
     try:
         value = float(spec)
     except ValueError:
-        raise SystemExit(f"--vol-budget needs a number like 0.4 or `none`, got {spec!r}") from None
+        raise SystemExit(
+            f"--vol-budget needs a number like 0.4 or `none`, got {spec!r}"
+        ) from None
     if value <= 0:
         raise SystemExit("--vol-budget must be positive, or `none`")
     return value
@@ -1147,7 +1284,9 @@ def main(argv: list[str] | None = None) -> int:
     for name in ("lookback", "rebalance", "vol_window"):
         frames[name] = bars_for(getattr(args, name), args.timeframe)  # type: ignore[assignment]
         if frames[name] < 1:  # only the age filter may be zero, meaning "no filter"
-            raise SystemExit(f"--{name.replace('_', '-')} must cover at least one {args.timeframe} bar")
+            raise SystemExit(
+                f"--{name.replace('_', '-')} must cover at least one {args.timeframe} bar"
+            )
     min_history = bars_for(args.min_history, args.timeframe)
     trend = bars_for(args.trend, args.timeframe, allow_none=True)
     vol_budget = budget_for(args.vol_budget)
@@ -1157,18 +1296,28 @@ def main(argv: list[str] | None = None) -> int:
     except FileNotFoundError as exc:
         raise SystemExit(f"{args.calendar}: {exc}") from None
     calendar = calendar_series.times
-    symbols = sorted(symbol for symbol, tf in data.available_series(args.data_dir) if tf == args.timeframe)
+    symbols = sorted(
+        symbol
+        for symbol, tf in data.available_series(args.data_dir)
+        if tf == args.timeframe
+    )
     symbols, equities = data.split_equities(symbols, args.exclude_equities)
     if note := data.equities_note(equities, excluded=args.exclude_equities):
         print(note)
-    print(f"reading {len(symbols)} {args.timeframe} series ({len(calendar):,} bars on the calendar)…")
+    print(
+        f"reading {len(symbols)} {args.timeframe} series ({len(calendar):,} bars on the calendar)…"
+    )
 
     aligned = {args.calendar: align(calendar_series, calendar, MAX_AGE_DAYS)}
     for position, symbol in enumerate(symbols, 1):
         if symbol == args.calendar:
             continue
         try:
-            aligned[symbol] = align(read_series(args.data_dir, symbol, args.timeframe), calendar, MAX_AGE_DAYS)
+            aligned[symbol] = align(
+                read_series(args.data_dir, symbol, args.timeframe),
+                calendar,
+                MAX_AGE_DAYS,
+            )
         except (FileNotFoundError, ValueError):
             continue
         if position % 200 == 0:
@@ -1191,7 +1340,8 @@ def main(argv: list[str] | None = None) -> int:
             label=f"top {args.top} by turnover",
             buy_hold=(
                 None
-                if args.buy_hold and args.buy_hold.strip().lower() in ("none", "off", "")
+                if args.buy_hold
+                and args.buy_hold.strip().lower() in ("none", "off", "")
                 else args.buy_hold or args.calendar
             ),
             trend=trend,

@@ -75,8 +75,12 @@ def test_quality_counts_missing_bars_from_a_gap():
 
 def test_quality_counts_a_missing_calendar_month_as_one_bar():
     bars = [
-        data.Bar(int(datetime(2026, 1, 1, tzinfo=timezone.utc).timestamp()), 1, 1, 1, 1, 1.0),
-        data.Bar(int(datetime(2026, 3, 1, tzinfo=timezone.utc).timestamp()), 1, 1, 1, 1, 1.0),
+        data.Bar(
+            int(datetime(2026, 1, 1, tzinfo=timezone.utc).timestamp()), 1, 1, 1, 1, 1.0
+        ),
+        data.Bar(
+            int(datetime(2026, 3, 1, tzinfo=timezone.utc).timestamp()), 1, 1, 1, 1, 1.0
+        ),
     ]
     report = data.data_quality(bars, "1mon")
     assert report.gaps == 1
@@ -163,8 +167,13 @@ def test_a_duration_that_makes_no_sense_is_rejected():
 
 def test_tokenised_equities_are_recognised_and_crypto_is_not():
     for symbol in (
-        "AAPLX-USDT", "TSLAX-USDT", "HOODX-USDT", "MSTRX-USDT", "CRCLX-USDT",
-        "SPCXX-USDT", "4STOCK-USDT",
+        "AAPLX-USDT",
+        "TSLAX-USDT",
+        "HOODX-USDT",
+        "MSTRX-USDT",
+        "CRCLX-USDT",
+        "SPCXX-USDT",
+        "4STOCK-USDT",
     ):
         assert is_tokenised_equity(symbol), symbol
     # The naming convention would get these wrong, which is why the list is explicit:
@@ -192,12 +201,19 @@ def test_every_x_suffixed_pair_is_classified_one_way_or_the_other(data_dir):
     neither `TOKENISED_EQUITY_SYMBOLS` nor `CRYPTO_X_SUFFIX_ALLOWLIST`: whoever
     adds a pair then has to say which it is.
     """
-    symbols = [symbol for symbol, _ in data.available_series(data_dir) if symbol.endswith("X-USDT")]
-    assert symbols, "the archive should hold X-suffixed pairs for this test to mean anything"
+    symbols = [
+        symbol
+        for symbol, _ in data.available_series(data_dir)
+        if symbol.endswith("X-USDT")
+    ]
+    assert symbols, (
+        "the archive should hold X-suffixed pairs for this test to mean anything"
+    )
     unclassified = sorted(
         symbol
         for symbol in symbols
-        if symbol not in data.TOKENISED_EQUITY_SYMBOLS and symbol not in data.CRYPTO_X_SUFFIX_ALLOWLIST
+        if symbol not in data.TOKENISED_EQUITY_SYMBOLS
+        and symbol not in data.CRYPTO_X_SUFFIX_ALLOWLIST
     )
     assert not unclassified, (
         f"unclassified X-suffixed pairs: {unclassified}. Add each to "

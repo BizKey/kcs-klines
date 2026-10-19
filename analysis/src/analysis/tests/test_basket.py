@@ -30,7 +30,11 @@ def test_the_window_shrinks_to_the_latest_listing():
     long_leg = make_bars(ramp(120))
     late_leg = make_bars(ramp(60), start=START + 60 * STEP)
     result = basket.run_basket(
-        {"OLD-USDT": long_leg, "NEW-USDT": late_leg}, "sma", {"window": 2}, "1h", costs=FREE
+        {"OLD-USDT": long_leg, "NEW-USDT": late_leg},
+        "sma",
+        {"window": 2},
+        "1h",
+        costs=FREE,
     )
     assert result.times[0] == START + 60 * STEP
     assert result.times[-1] == long_leg[-1].time
@@ -42,7 +46,9 @@ def test_the_timeline_is_the_bars_every_leg_has():
     right = make_bars(wavy(40))
     missing = right[7].time
     del right[7]  # the second leg simply has no bar there
-    result = basket.run_basket({"A-USDT": left, "B-USDT": right}, "sma", {"window": 2}, "1h", costs=FREE)
+    result = basket.run_basket(
+        {"A-USDT": left, "B-USDT": right}, "sma", {"window": 2}, "1h", costs=FREE
+    )
     assert missing not in result.times
     assert set(result.times) <= {bar.time for bar in right}
     assert result.dropped == 1  # one leg-bar inside the window did not survive
@@ -108,7 +114,9 @@ def test_two_identical_legs_are_just_that_leg():
     one = get_strategy("sma", window=3)
     bars = make_bars(wavy(60))
     single = run_backtest(bars, one.targets(bars), "1h", FREE, label="sma")
-    result = basket.run_basket({"A": bars, "B": bars}, "sma", {"window": 3}, "1h", costs=FREE)
+    result = basket.run_basket(
+        {"A": bars, "B": bars}, "sma", {"window": 3}, "1h", costs=FREE
+    )
     expected = single.performance.final_equity
     assert result.performance.final_equity == pytest.approx(expected, rel=1e-12)
     assert result.legs[0].equity == pytest.approx(result.legs[1].equity)
@@ -118,20 +126,26 @@ def test_the_capital_is_split_evenly_at_the_start_and_drifts_with_performance():
     """Equal target weights are not equal money once the legs diverge."""
     riser = make_bars(ramp(60, start=100.0, step=2.0))
     flat = make_bars([100.0] * 60)
-    result = basket.run_basket({"UP": riser, "FLAT": flat}, "sma", {"window": 2}, "1h", costs=FREE)
+    result = basket.run_basket(
+        {"UP": riser, "FLAT": flat}, "sma", {"window": 2}, "1h", costs=FREE
+    )
 
     assert [leg.weight for leg in result.legs] == [pytest.approx(0.5)] * 2  # the target
     shares = result.leg_shares
     assert sum(shares.values()) == pytest.approx(1.0)
     assert shares["UP"] > 0.5  # the winner owns more than its 50% target
     assert shares["FLAT"] < 0.5  # the laggard owns less
-    assert result.legs[1].equity[-1] == pytest.approx(1.0)  # never in the market, so never moved
+    assert result.legs[1].equity[-1] == pytest.approx(
+        1.0
+    )  # never in the market, so never moved
 
 
 def test_a_share_is_the_legs_money_over_the_baskets_money():
     riser = make_bars(ramp(60, start=100.0, step=2.0))
     flat = make_bars([100.0] * 60)
-    result = basket.run_basket({"UP": riser, "FLAT": flat}, "sma", {"window": 2}, "1h", costs=FREE)
+    result = basket.run_basket(
+        {"UP": riser, "FLAT": flat}, "sma", {"window": 2}, "1h", costs=FREE
+    )
     up = result.legs[0]
     assert result.leg_shares["UP"] == pytest.approx(
         0.5 * up.equity[-1] / result.performance.final_equity
@@ -140,8 +154,12 @@ def test_a_share_is_the_legs_money_over_the_baskets_money():
 
 def test_capital_in_market_is_the_weighted_leg_exposure():
     riser = make_bars(ramp(60, start=100.0, step=2.0))
-    result = basket.run_basket({"A": riser, "B": riser}, "sma", {"window": 2}, "1h", costs=FREE)
-    assert result.capital_in_market == pytest.approx(sum(0.5 * leg.exposure for leg in result.legs))
+    result = basket.run_basket(
+        {"A": riser, "B": riser}, "sma", {"window": 2}, "1h", costs=FREE
+    )
+    assert result.capital_in_market == pytest.approx(
+        sum(0.5 * leg.exposure for leg in result.legs)
+    )
     assert result.capital_in_market > 0.9  # a rising series keeps the SMA rule long
 
     still = basket.run_basket(
@@ -157,16 +175,24 @@ def test_capital_in_market_is_the_weighted_leg_exposure():
 def test_a_wiped_out_basket_reports_zero_shares():
     """A geared leg can take the account to zero; the shares must not divide by it."""
     panel = make_bars([100.0, 100.0, 100.0, 100.0])
-    result = basket.run_basket({"A": panel, "B": panel}, "sma", {"window": 2}, "1h", costs=FREE)
-    result.performance = dataclasses.replace(result.performance, final_equity=0.0, total_return=-1.0)
+    result = basket.run_basket(
+        {"A": panel, "B": panel}, "sma", {"window": 2}, "1h", costs=FREE
+    )
+    result.performance = dataclasses.replace(
+        result.performance, final_equity=0.0, total_return=-1.0
+    )
     assert result.leg_shares == {"A": 0.0, "B": 0.0}
 
 
 def test_legs_are_rebased_to_one_at_the_window_start():
     """A leg that was already trading before the window starts the basket at 1.0."""
-    long_leg = make_bars(ramp(200))  # rises steadily, so an SMA leg is long and profitable
+    long_leg = make_bars(
+        ramp(200)
+    )  # rises steadily, so an SMA leg is long and profitable
     late_leg = make_bars(ramp(60), start=START + 140 * STEP)
-    result = basket.run_basket({"OLD": long_leg, "NEW": late_leg}, "sma", {"window": 2}, "1h", costs=FREE)
+    result = basket.run_basket(
+        {"OLD": long_leg, "NEW": late_leg}, "sma", {"window": 2}, "1h", costs=FREE
+    )
 
     sliced = [bar for bar in long_leg if bar.time <= result.times[-1]]
     strategy = get_strategy("sma", window=2)
@@ -175,9 +201,15 @@ def test_legs_are_rebased_to_one_at_the_window_start():
     raw_at_start = raw.equity[index[result.times[0]]]
 
     assert raw_at_start > 1.0  # it had already made money before the basket existed
-    assert result.legs[0].equity[0] == pytest.approx(1.0)  # and that gain is not the basket's
-    assert result.legs[0].equity[-1] == pytest.approx(raw.performance.final_equity / raw_at_start)
-    assert result.legs[1].equity[0] == pytest.approx(1.0)  # the late leg starts where it listed
+    assert result.legs[0].equity[0] == pytest.approx(
+        1.0
+    )  # and that gain is not the basket's
+    assert result.legs[0].equity[-1] == pytest.approx(
+        raw.performance.final_equity / raw_at_start
+    )
+    assert result.legs[1].equity[0] == pytest.approx(
+        1.0
+    )  # the late leg starts where it listed
 
 
 def test_a_flat_market_leaves_the_basket_flat():
@@ -226,7 +258,9 @@ def test_the_benchmark_tracks_the_average_of_the_legs_price_paths():
     # opens[0] is far below opens[1]: a listing bar, which the benchmark must skip.
     listing = make_bars([10.0, 10.0, 10.0, 10.0], opens=[1.0, 10.0, 10.0, 10.0])
     flat = make_bars([100.0] * 4)
-    result = basket.run_basket({"UP": listing, "FLAT": flat}, "sma", {"window": 2}, "1h", costs=FREE)
+    result = basket.run_basket(
+        {"UP": listing, "FLAT": flat}, "sma", {"window": 2}, "1h", costs=FREE
+    )
     expected_last = 0.5 * (listing[-1].close / listing[1].open) + 0.5 * 1.0
     assert result.benchmark_equity[0] == pytest.approx(1.0)  # cash on the first bar
     assert result.benchmark_equity[-1] == pytest.approx(expected_last, rel=1e-12)
@@ -235,8 +269,12 @@ def test_the_benchmark_tracks_the_average_of_the_legs_price_paths():
 
 def test_the_benchmark_ignores_a_listing_bar_the_strategy_cannot_trade():
     """The SUI/PYTH case: a 12.8x first bar must not become a 12.8x benchmark."""
-    listing = make_bars([12.825, 1.2825, 1.2825, 1.2825], opens=[0.1, 1.2825, 1.2825, 1.2825])
-    result = basket.run_basket({"SUI-USDT": listing}, "sma", {"window": 2}, "1h", costs=FREE)
+    listing = make_bars(
+        [12.825, 1.2825, 1.2825, 1.2825], opens=[0.1, 1.2825, 1.2825, 1.2825]
+    )
+    result = basket.run_basket(
+        {"SUI-USDT": listing}, "sma", {"window": 2}, "1h", costs=FREE
+    )
     assert result.benchmark_equity == pytest.approx([1.0] * 4)
     assert result.benchmark.total_return == pytest.approx(0.0)
 
@@ -248,8 +286,12 @@ def test_one_leg_matches_the_single_series_backtest_exactly():
     single = run_backtest(bars, strategy.targets(bars), "1h", PAID, label="sma")
     result = basket.run_basket({"TOY": bars}, "sma", {"window": 5}, "1h", costs=PAID)
 
-    assert result.performance.final_equity == pytest.approx(single.performance.final_equity, rel=1e-12)
-    assert result.benchmark.final_equity == pytest.approx(single.benchmark.performance.final_equity, rel=1e-12)
+    assert result.performance.final_equity == pytest.approx(
+        single.performance.final_equity, rel=1e-12
+    )
+    assert result.benchmark.final_equity == pytest.approx(
+        single.benchmark.performance.final_equity, rel=1e-12
+    )
     assert result.legs[0].trades == len(single.closed_trades)
     assert result.legs[0].fees == pytest.approx(single.fees_paid, rel=1e-12)
 
@@ -274,7 +316,9 @@ def test_fees_in_window_matches_the_engine_when_the_window_is_everything():
     bars = make_bars(wavy(120, amplitude=8.0, period=3.0))
     strategy = SmaTrend(window=3)
     run = run_backtest(bars, strategy.targets(bars), "1h", PAID, label="sma")
-    assert engine.fees_in_window(run, PAID.rate, 0) == pytest.approx(run.fees_paid, rel=1e-12)
+    assert engine.fees_in_window(run, PAID.rate, 0) == pytest.approx(
+        run.fees_paid, rel=1e-12
+    )
     assert run.fees_paid > 0
 
 
@@ -282,7 +326,9 @@ def test_fees_in_window_adds_up_across_a_split():
     bars = make_bars(wavy(120, amplitude=8.0, period=3.0))
     strategy = SmaTrend(window=3)
     run = run_backtest(bars, strategy.targets(bars), "1h", PAID, label="sma")
-    first = engine.fees_in_window(run, PAID.rate, 0) - engine.fees_in_window(run, PAID.rate, 60)
+    first = engine.fees_in_window(run, PAID.rate, 0) - engine.fees_in_window(
+        run, PAID.rate, 60
+    )
     second = engine.fees_in_window(run, PAID.rate, 60)
     assert first + second == pytest.approx(run.fees_paid, rel=1e-12)
     assert second < run.fees_paid
@@ -333,11 +379,15 @@ def test_the_report_names_the_window_the_legs_and_the_benchmark():
 
 
 def test_the_summary_is_json_friendly():
-    result = basket.run_basket(legs(A=wavy(40), B=wavy(40)), "sma", {"window": 3}, "1h", costs=PAID)
+    result = basket.run_basket(
+        legs(A=wavy(40), B=wavy(40)), "sma", {"window": 3}, "1h", costs=PAID
+    )
     payload = result.as_dict()
     assert payload["window"]["bars"] == len(result.times)
     assert [leg["symbol"] for leg in payload["legs"]] == ["A", "B"]
-    assert payload["basket"]["total_return"] == pytest.approx(result.performance.total_return)
+    assert payload["basket"]["total_return"] == pytest.approx(
+        result.performance.total_return
+    )
     assert "equity" not in payload
 
     with_curves = result.as_dict(include_curves=True)
@@ -348,14 +398,21 @@ def test_the_summary_is_json_friendly():
 def test_a_wiped_out_curve_still_draws(tmp_path: Path):
     """A geared leg can reach zero; a log-scale chart must not crash on it."""
     path = tmp_path / "zero.svg"
-    report.write_curves(path, [0, 3600, 7200], {"basket": [1.0, 0.5, 0.0], "B&H": [1.0, 0.9, 0.8]}, "zero")
+    report.write_curves(
+        path,
+        [0, 3600, 7200],
+        {"basket": [1.0, 0.5, 0.0], "B&H": [1.0, 0.9, 0.8]},
+        "zero",
+    )
     text = path.read_text()
     assert "B&amp;H" in text  # the label is escaped, not injected raw
     assert text.count("<polyline") == 2
 
 
 def test_the_chart_and_the_csv_are_written(tmp_path: Path):
-    result = basket.run_basket(legs(A=wavy(40), B=wavy(40, drift=0.1)), "sma", {"window": 3}, "1h", costs=PAID)
+    result = basket.run_basket(
+        legs(A=wavy(40), B=wavy(40, drift=0.1)), "sma", {"window": 3}, "1h", costs=PAID
+    )
     csv_path = tmp_path / "basket_equity.csv"
     svg_path = tmp_path / "basket_equity.svg"
     json_path = tmp_path / "basket_metrics.json"
@@ -364,7 +421,13 @@ def test_the_chart_and_the_csv_are_written(tmp_path: Path):
     basket.write_metrics(json_path, result, include_curves=True)
 
     rows = list(csv.DictReader(csv_path.open()))
-    assert list(rows[0]) == ["time_utc", "basket", "benchmark_equal_weight", "leg_A", "leg_B"]
+    assert list(rows[0]) == [
+        "time_utc",
+        "basket",
+        "benchmark_equal_weight",
+        "leg_A",
+        "leg_B",
+    ]
     assert len(rows) == len(result.times)
     assert float(rows[-1]["basket"]) == pytest.approx(result.performance.final_equity)
     svg = svg_path.read_text()
@@ -406,7 +469,9 @@ def test_cli_prints_a_basket_without_writing_anything(basket_archive: Path, caps
     assert "best leg" in printed
 
 
-def test_cli_writes_the_curve_the_chart_and_the_json(basket_archive: Path, tmp_path: Path, capsys):
+def test_cli_writes_the_curve_the_chart_and_the_json(
+    basket_archive: Path, tmp_path: Path, capsys
+):
     out = tmp_path / "out"
     code = basket.main(
         [
@@ -431,16 +496,23 @@ def test_cli_writes_the_curve_the_chart_and_the_json(basket_archive: Path, tmp_p
         "basket_sma10_MID-USDT+UP-USDT_1h_equity.svg",
         "basket_sma10_MID-USDT+UP-USDT_1h_metrics.json",
     ]
-    payload = json.loads((out / "basket_sma10_MID-USDT+UP-USDT_1h_metrics.json").read_text())
+    payload = json.loads(
+        (out / "basket_sma10_MID-USDT+UP-USDT_1h_metrics.json").read_text()
+    )
     assert [leg["symbol"] for leg in payload["legs"]] == ["UP-USDT", "MID-USDT"]
     assert payload["timeframe"] == "1h"
 
 
-def test_two_different_baskets_do_not_overwrite_each_other(basket_archive: Path, tmp_path: Path):
+def test_two_different_baskets_do_not_overwrite_each_other(
+    basket_archive: Path, tmp_path: Path
+):
     """The legs are in the filename, so a one-leg run cannot clobber a two-leg one."""
     out = tmp_path / "out"
     one = basket.run_basket(
-        {"UP-USDT": data.load_series(basket_archive, "UP-USDT", "1h")}, "sma", {"window": 10}, "1h"
+        {"UP-USDT": data.load_series(basket_archive, "UP-USDT", "1h")},
+        "sma",
+        {"window": 10},
+        "1h",
     )
     two = basket.run_basket(
         {
@@ -466,14 +538,25 @@ def test_a_long_leg_list_falls_back_to_a_digest():
     # …and the tag depends on *which* symbols, not just how many.
     other = dict(series)
     other["COIN00-USDT"] = make_bars(wavy(40, drift=0.5))
-    assert basket.artifact_stem(
-        basket.run_basket(other, "sma", {"window": 3}, "1h", costs=FREE)
-    ) == stem  # same symbols, different prices: same basket name
+    assert (
+        basket.artifact_stem(
+            basket.run_basket(other, "sma", {"window": 3}, "1h", costs=FREE)
+        )
+        == stem
+    )  # same symbols, different prices: same basket name
 
 
 def test_cli_explains_a_symbol_that_is_not_collected(basket_archive: Path):
     with pytest.raises(SystemExit, match="NOPE-USDT"):
-        basket.main(["--data-dir", str(basket_archive), "--symbols", "NOPE-USDT", "--no-artifacts"])
+        basket.main(
+            [
+                "--data-dir",
+                str(basket_archive),
+                "--symbols",
+                "NOPE-USDT",
+                "--no-artifacts",
+            ]
+        )
 
 
 def test_cli_rejects_a_parameter_the_strategy_does_not_have(basket_archive: Path):
@@ -498,8 +581,12 @@ def test_the_basket_reads_only_bars_inside_the_window(basket_archive: Path):
     full = data.load_series(basket_archive, "UP-USDT", "1h")
     cut = full[:200]
     other = data.load_series(basket_archive, "MID-USDT", "1h")[:200]
-    long_run = basket.run_basket({"UP": full, "MID": other}, "sma", {"window": 10}, "1h", costs=PAID)
-    short_run = basket.run_basket({"UP": cut, "MID": other}, "sma", {"window": 10}, "1h", costs=PAID)
+    long_run = basket.run_basket(
+        {"UP": full, "MID": other}, "sma", {"window": 10}, "1h", costs=PAID
+    )
+    short_run = basket.run_basket(
+        {"UP": cut, "MID": other}, "sma", {"window": 10}, "1h", costs=PAID
+    )
     assert long_run.times == short_run.times
     assert long_run.equity == pytest.approx(short_run.equity)
 
@@ -509,8 +596,10 @@ def test_the_basket_reads_only_bars_inside_the_window(basket_archive: Path):
 
 def test_the_basket_marks_the_bars_where_any_leg_moved():
     result = basket.run_basket(
-        {"A": make_bars(wavy(200, amplitude=10.0, period=5.0)),
-         "B": make_bars(wavy(200, amplitude=10.0, period=7.0, drift=0.3))},
+        {
+            "A": make_bars(wavy(200, amplitude=10.0, period=5.0)),
+            "B": make_bars(wavy(200, amplitude=10.0, period=7.0, drift=0.3)),
+        },
         "sma",
         {"window": 4},
         "1h",
@@ -529,7 +618,10 @@ def test_the_basket_marks_the_bars_where_any_leg_moved():
 
 def test_a_swap_tooltip_names_the_leg_and_the_direction():
     result = basket.run_basket(
-        {"A": make_bars(wavy(200, amplitude=10.0, period=5.0)), "B": make_bars([100.0] * 200)},
+        {
+            "A": make_bars(wavy(200, amplitude=10.0, period=5.0)),
+            "B": make_bars([100.0] * 200),
+        },
         "sma",
         {"window": 4},
         "1h",
@@ -545,14 +637,21 @@ def test_a_swap_tooltip_names_the_leg_and_the_direction():
 
 def test_a_basket_that_never_trades_has_no_markers():
     result = basket.run_basket(
-        {"A": make_bars([100.0] * 60), "B": make_bars([50.0] * 60)}, "sma", {"window": 3}, "1h", costs=PAID
+        {"A": make_bars([100.0] * 60), "B": make_bars([50.0] * 60)},
+        "sma",
+        {"window": 3},
+        "1h",
+        costs=PAID,
     )
     assert basket.rebalance_markers(result) == []
 
 
 def test_the_basket_chart_carries_the_markers(tmp_path: Path):
     result = basket.run_basket(
-        {"A": make_bars(wavy(200, amplitude=10.0, period=5.0)), "B": make_bars([100.0] * 200)},
+        {
+            "A": make_bars(wavy(200, amplitude=10.0, period=5.0)),
+            "B": make_bars([100.0] * 200),
+        },
         "sma",
         {"window": 4},
         "1h",
@@ -561,7 +660,11 @@ def test_the_basket_chart_carries_the_markers(tmp_path: Path):
     path = tmp_path / "basket.svg"
     basket.write_chart(path, result)
     text = path.read_text()
-    assert text.count('class="position-change"') == len(basket.rebalance_markers(result)) > 0
+    assert (
+        text.count('class="position-change"')
+        == len(basket.rebalance_markers(result))
+        > 0
+    )
     assert "position changes:" in text
 
 
@@ -569,9 +672,14 @@ def test_the_basket_chart_carries_the_markers(tmp_path: Path):
 
 
 def test_a_window_shortens_the_basket_without_truncating_the_legs():
-    series = {"A": make_bars(wavy(400, drift=0.4)), "B": make_bars(wavy(400, drift=-0.2))}
+    series = {
+        "A": make_bars(wavy(400, drift=0.4)),
+        "B": make_bars(wavy(400, drift=-0.2)),
+    }
     full = basket.run_basket(series, "sma", {"window": 5}, "1h", costs=PAID)
-    short = basket.run_basket(series, "sma", {"window": 5}, "1h", costs=PAID, window=100 * STEP)
+    short = basket.run_basket(
+        series, "sma", {"window": 5}, "1h", costs=PAID, window=100 * STEP
+    )
 
     window_bars = len(short.times)
     assert window_bars == 101  # 100 hours of hourly bars, both ends included
@@ -581,13 +689,17 @@ def test_a_window_shortens_the_basket_without_truncating_the_legs():
     for leg_short, leg_full in zip(short.legs, full.legs):
         assert leg_short.positions == leg_full.positions[-window_bars:]
         assert leg_short.equity[0] == pytest.approx(1.0)
-        assert leg_short.equity[-1] == pytest.approx(leg_full.equity[-1] / leg_full.equity[-window_bars])
+        assert leg_short.equity[-1] == pytest.approx(
+            leg_full.equity[-1] / leg_full.equity[-window_bars]
+        )
 
 
 def test_a_window_keeps_the_signals_the_legs_really_had():
     """Warm history and a cold truncation are not the same backtest."""
     bars = make_bars(wavy(400, drift=0.4))
-    warm = basket.run_basket({"A": bars}, "sma", {"window": 5}, "1h", costs=PAID, window=100 * STEP)
+    warm = basket.run_basket(
+        {"A": bars}, "sma", {"window": 5}, "1h", costs=PAID, window=100 * STEP
+    )
     cold = basket.run_basket({"A": bars[-100:]}, "sma", {"window": 5}, "1h", costs=PAID)
     assert len(cold.times) == 100 and len(warm.times) == 101
     assert warm.legs[0].exposure != pytest.approx(cold.legs[0].exposure)
@@ -597,8 +709,17 @@ def test_a_window_keeps_the_signals_the_legs_really_had():
 def test_the_basket_cli_takes_a_period(basket_archive: Path, capsys):
     code = basket.main(
         [
-            "--data-dir", str(basket_archive), "--symbols", "UP-USDT,MID-USDT",
-            "--strategy", "sma", "--param", "window=10", "--last", "100d", "--no-artifacts",
+            "--data-dir",
+            str(basket_archive),
+            "--symbols",
+            "UP-USDT,MID-USDT",
+            "--strategy",
+            "sma",
+            "--param",
+            "window=10",
+            "--last",
+            "100d",
+            "--no-artifacts",
         ]
     )
     printed = capsys.readouterr().out
@@ -613,9 +734,15 @@ def test_the_basket_cli_takes_a_period(basket_archive: Path, capsys):
 def _turnover_archive(tmp_path: Path, days: int = 200):
     """Three symbols, the last one far busier than the others."""
     root = tmp_path / "spot"
-    for symbol, base in (("BUSY-USDT", 5_000_000.0), ("MID-USDT", 500_000.0),
-                         ("QUIET-USDT", 10_000.0), ("LATE-USDT", 9_000_000.0)):
-        bars = make_bars(ramp(days), start=START + (0 if symbol != "LATE-USDT" else 60) * STEP)
+    for symbol, base in (
+        ("BUSY-USDT", 5_000_000.0),
+        ("MID-USDT", 500_000.0),
+        ("QUIET-USDT", 10_000.0),
+        ("LATE-USDT", 9_000_000.0),
+    ):
+        bars = make_bars(
+            ramp(days), start=START + (0 if symbol != "LATE-USDT" else 60) * STEP
+        )
         write_archive(root, symbol, "1d", bars, turnovers=[base] * len(bars))
     return root
 
@@ -624,7 +751,12 @@ def test_the_turnover_ranking_uses_only_bars_before_the_reference(tmp_path: Path
     root = _turnover_archive(tmp_path)
     reference = START + 100 * STEP
     ranked = basket.select_by_turnover(
-        root, "1d", 4, lookback=100 * STEP, reference=reference, quote="USDT",
+        root,
+        "1d",
+        4,
+        lookback=100 * STEP,
+        reference=reference,
+        quote="USDT",
     )
     names = [symbol for symbol, _ in ranked]
     # LATE-USDT only printed from day 60, so it has 40 bars before the reference: still
@@ -632,32 +764,57 @@ def test_the_turnover_ranking_uses_only_bars_before_the_reference(tmp_path: Path
     assert names[0] in ("LATE-USDT", "BUSY-USDT")
     assert names[-1] == "QUIET-USDT"
     early = basket.select_by_turnover(
-        root, "1d", 4, lookback=100 * STEP, reference=START + 10 * STEP, quote="USDT",
+        root,
+        "1d",
+        4,
+        lookback=100 * STEP,
+        reference=START + 10 * STEP,
+        quote="USDT",
     )
-    assert "LATE-USDT" not in [symbol for symbol, _ in early]   # no bars before then
+    assert "LATE-USDT" not in [symbol for symbol, _ in early]  # no bars before then
 
 
-def test_turnover_selection_and_the_plain_universe_agree_on_a_one_name_basket(tmp_path: Path):
+def test_turnover_selection_and_the_plain_universe_agree_on_a_one_name_basket(
+    tmp_path: Path,
+):
     root = _turnover_archive(tmp_path)
     ranked = basket.select_by_turnover(
-        root, "1d", 1, lookback=100 * STEP, reference=START + 150 * STEP, quote="USDT",
+        root,
+        "1d",
+        1,
+        lookback=100 * STEP,
+        reference=START + 150 * STEP,
+        quote="USDT",
     )
     assert [symbol for symbol, _ in ranked] == ["LATE-USDT"]
 
 
 def test_cli_selects_the_legs_and_says_so(tmp_path: Path, capsys):
     root = _turnover_archive(tmp_path)
-    code = basket.main([
-        "--data-dir", str(root), "--timeframe", "1d",
-        "--symbols", "BUSY-USDT,MID-USDT,QUIET-USDT",
-        "--select-turnover", "1", "--select-lookback", "100d",
-        "--strategy", "sma", "--param", "window=20", "--no-artifacts",
-    ])
+    code = basket.main(
+        [
+            "--data-dir",
+            str(root),
+            "--timeframe",
+            "1d",
+            "--symbols",
+            "BUSY-USDT,MID-USDT,QUIET-USDT",
+            "--select-turnover",
+            "1",
+            "--select-lookback",
+            "100d",
+            "--strategy",
+            "sma",
+            "--param",
+            "window=20",
+            "--no-artifacts",
+        ]
+    )
     printed = capsys.readouterr().out
     assert code == 0
     assert "selected by turnover" in printed
     block = printed.split("selected by turnover")[1].split("====")[0]
-    assert "BUSY-USDT" in block                 # the busiest of the three
+    assert "BUSY-USDT" in block  # the busiest of the three
     assert "QUIET-USDT" not in block
 
 
@@ -668,37 +825,73 @@ def test_from_and_to_bound_the_reported_window(tmp_path: Path, capsys):
     root = _turnover_archive(tmp_path)
     import datetime as dt
 
-    day = lambda n: dt.datetime.fromtimestamp(START + n * STEP, dt.timezone.utc).strftime("%Y-%m-%d")
-    code = basket.main([
-        "--data-dir", str(root), "--timeframe", "1d",
-        "--symbols", "BUSY-USDT,MID-USDT",
-        "--strategy", "sma", "--param", "window=20",
-        "--from", day(40), "--to", day(120), "--no-artifacts",
-    ])
+    day = lambda n: dt.datetime.fromtimestamp(
+        START + n * STEP, dt.timezone.utc
+    ).strftime("%Y-%m-%d")
+    code = basket.main(
+        [
+            "--data-dir",
+            str(root),
+            "--timeframe",
+            "1d",
+            "--symbols",
+            "BUSY-USDT,MID-USDT",
+            "--strategy",
+            "sma",
+            "--param",
+            "window=20",
+            "--from",
+            day(40),
+            "--to",
+            day(120),
+            "--no-artifacts",
+        ]
+    )
     printed = capsys.readouterr().out
     assert code == 0
     assert day(40) in printed and day(120) in printed
     # the printed span is the bound that was asked for (the fixtures' bars are hourly
     # under a daily label, so the "years" figure is the label's, not the spacing's)
-    window_line = next(line for line in printed.splitlines() if line.startswith("window"))
+    window_line = next(
+        line for line in printed.splitlines() if line.startswith("window")
+    )
     assert day(40) in window_line and day(120) in window_line
 
 
 def test_a_malformed_date_is_refused(tmp_path: Path):
     root = _turnover_archive(tmp_path)
     with pytest.raises(SystemExit):
-        basket.main([
-            "--data-dir", str(root), "--timeframe", "1d", "--symbols", "BUSY-USDT",
-            "--strategy", "sma", "--param", "window=20",
-            "--from", "October 2024", "--no-artifacts",
-        ])
+        basket.main(
+            [
+                "--data-dir",
+                str(root),
+                "--timeframe",
+                "1d",
+                "--symbols",
+                "BUSY-USDT",
+                "--strategy",
+                "sma",
+                "--param",
+                "window=20",
+                "--from",
+                "October 2024",
+                "--no-artifacts",
+            ]
+        )
 
 
-def test_the_turnover_ranking_reference_follows_the_window_start(tmp_path: Path, capsys):
+def test_the_turnover_ranking_reference_follows_the_window_start(
+    tmp_path: Path, capsys
+):
     """A pair that only becomes busy later must not be chosen for an early window."""
     root = _turnover_archive(tmp_path)
     ranking = basket.select_by_turnover(
-        root, "1d", 4, lookback=100 * STEP, reference=START + 10 * STEP, quote="USDT",
+        root,
+        "1d",
+        4,
+        lookback=100 * STEP,
+        reference=START + 10 * STEP,
+        quote="USDT",
     )
     assert "LATE-USDT" not in [symbol for symbol, _ in ranking]
 
@@ -720,10 +913,12 @@ def test_the_liquidity_mask_is_causal_and_needs_a_full_window():
 def test_one_missing_bar_barely_moves_the_reading_but_a_dead_pair_is_dropped():
     times = [START + i * STEP for i in range(12)]
     turnover = [5_000_000.0] * 12
-    turnover[4] = 0.0                        # a single gap must not cause an exit and a re-entry
+    turnover[4] = 0.0  # a single gap must not cause an exit and a re-entry
     mask = basket.liquidity_mask(times, turnover, minimum=1_000_000, window=3)
     assert mask[times[4]] is True, "one empty bar should not flatten the leg"
-    dead = [5_000_000.0] * 4 + [0.0] * 8     # a pair that stops trading must lose its reading
+    dead = [5_000_000.0] * 4 + [
+        0.0
+    ] * 8  # a pair that stops trading must lose its reading
     mask = basket.liquidity_mask(times, dead, minimum=1_000_000, window=3)
     assert mask[times[11]] is False
 
@@ -737,11 +932,22 @@ def test_the_rule_actually_flattens_a_leg_that_goes_quiet(tmp_path: Path, capsys
     write_archive(root, "KEEPS-USDT", "1h", bars, turnovers=[5_000_000.0] * 400)
 
     def run(*extra):
-        code = basket.main([
-            "--data-dir", str(root), "--timeframe", "1h",
-            "--symbols", "FADES-USDT,KEEPS-USDT", "--strategy", "sma",
-            "--param", "window=20", "--no-artifacts", *extra,
-        ])
+        code = basket.main(
+            [
+                "--data-dir",
+                str(root),
+                "--timeframe",
+                "1h",
+                "--symbols",
+                "FADES-USDT,KEEPS-USDT",
+                "--strategy",
+                "sma",
+                "--param",
+                "window=20",
+                "--no-artifacts",
+                *extra,
+            ]
+        )
         printed = capsys.readouterr().out
         assert code == 0
         return printed
@@ -753,7 +959,9 @@ def test_the_rule_actually_flattens_a_leg_that_goes_quiet(tmp_path: Path, capsys
     def exposure(printed_text: str) -> float:
         """The basket's own exposure line, as a fraction, from the rendered report."""
         line = next(
-            row for row in printed_text.splitlines() if row.strip().startswith("in market")
+            row
+            for row in printed_text.splitlines()
+            if row.strip().startswith("in market")
         )
         return float(line.split(":")[1].split("%")[0].strip().lstrip("+")) / 100.0
 
@@ -772,11 +980,22 @@ def test_the_universe_can_exclude_tokenised_equities(tmp_path: Path, capsys):
         write_archive(root, symbol, "1d", bars)
 
     def run(*extra):
-        code = basket.main([
-            "--data-dir", str(root), "--timeframe", "1d",
-            "--symbols", "BTC-USDT,ETH-USDT,AAPLX-USDT", "--strategy", "sma",
-            "--param", "window=20", "--no-artifacts", *extra,
-        ])
+        code = basket.main(
+            [
+                "--data-dir",
+                str(root),
+                "--timeframe",
+                "1d",
+                "--symbols",
+                "BTC-USDT,ETH-USDT,AAPLX-USDT",
+                "--strategy",
+                "sma",
+                "--param",
+                "window=20",
+                "--no-artifacts",
+                *extra,
+            ]
+        )
         return code, capsys.readouterr().out
 
     code, kept_output = run()
@@ -794,8 +1013,19 @@ def test_excluding_every_leg_is_an_error_not_an_empty_basket(tmp_path: Path, cap
     root = tmp_path / "spot"
     write_archive(root, "AAPLX-USDT", "1d", make_bars(wavy(400)))
     with pytest.raises(SystemExit, match="tokenised equity"):
-        basket.main([
-            "--data-dir", str(root), "--timeframe", "1d", "--symbols", "AAPLX-USDT",
-            "--strategy", "sma", "--param", "window=20", "--no-artifacts",
-            "--exclude-equities",
-        ])
+        basket.main(
+            [
+                "--data-dir",
+                str(root),
+                "--timeframe",
+                "1d",
+                "--symbols",
+                "AAPLX-USDT",
+                "--strategy",
+                "sma",
+                "--param",
+                "window=20",
+                "--no-artifacts",
+                "--exclude-equities",
+            ]
+        )

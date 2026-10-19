@@ -116,7 +116,9 @@ class RsiReversion(Strategy):
         exit_rule = f"RSI > {self.exit_level:g} or {self.max_hold} bars"
         if self.mode == "long-only":
             return f"long when {entry}, exit when {exit_rule}"
-        return f"long when {entry}, short above {self.overbought:g}, exit on {exit_rule}"
+        return (
+            f"long when {entry}, short above {self.overbought:g}, exit on {exit_rule}"
+        )
 
 
 @register("rsi-rev")

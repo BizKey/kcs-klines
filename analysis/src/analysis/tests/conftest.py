@@ -93,7 +93,13 @@ def write_archive(
     return root
 
 
-def wavy(count: int = 400, *, amplitude: float = 20.0, period: float = 7.0, drift: float = 0.05) -> list[float]:
+def wavy(
+    count: int = 400,
+    *,
+    amplitude: float = 20.0,
+    period: float = 7.0,
+    drift: float = 0.05,
+) -> list[float]:
     """A trend plus a repeating cycle: enough crossings to make any SMA trade."""
     import math
 

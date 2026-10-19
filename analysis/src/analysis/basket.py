@@ -176,10 +176,14 @@ def parse_symbols(raw: str) -> list[str]:
     """`"BTC-USDT, eth-usdt"` -> `["BTC-USDT", "ETH-USDT"]`, order preserved."""
     symbols = [item.strip().upper() for item in raw.split(",") if item.strip()]
     if not symbols:
-        raise SystemExit("--symbols needs at least one symbol, e.g. --symbols BTC-USDT,ETH-USDT")
+        raise SystemExit(
+            "--symbols needs at least one symbol, e.g. --symbols BTC-USDT,ETH-USDT"
+        )
     duplicates = sorted({symbol for symbol in symbols if symbols.count(symbol) > 1})
     if duplicates:
-        raise SystemExit(f"--symbols lists {', '.join(duplicates)} twice; one leg per symbol is kept")
+        raise SystemExit(
+            f"--symbols lists {', '.join(duplicates)} twice; one leg per symbol is kept"
+        )
     return symbols
 
 
@@ -201,7 +205,10 @@ def shared_timeline(series: dict[str, list[Bar]], first: int, last: int) -> list
     which the basket cannot be marked, and forward-filling a stale price through
     an exchange-wide outage would invent a return that nobody could have earned.
     """
-    stamps = [{bar.time for bar in bars if first <= bar.time <= last} for bars in series.values()]
+    stamps = [
+        {bar.time for bar in bars if first <= bar.time <= last}
+        for bars in series.values()
+    ]
     return sorted(set.intersection(*stamps))
 
 
@@ -249,7 +256,8 @@ def run_basket(
         first = max(first, since)
     if first > last:
         spans = ", ".join(
-            f"{symbol} {iso(bars[0].time)}..{iso(bars[-1].time)}" for symbol, bars in series.items()
+            f"{symbol} {iso(bars[0].time)}..{iso(bars[-1].time)}"
+            for symbol, bars in series.items()
         )
         raise ValueError(f"the legs share no window at all: {spans}")
     timeline = shared_timeline(series, first, last)
@@ -258,10 +266,9 @@ def run_basket(
             f"the legs share only {len(timeline)} bar(s) inside {iso(first)} .. {iso(last)}: "
             "that is not enough to measure anything"
         )
-    dropped = (
-        sum(1 for bars in series.values() for bar in bars if first <= bar.time <= last)
-        - len(timeline) * len(series)
-    )
+    dropped = sum(
+        1 for bars in series.values() for bar in bars if first <= bar.time <= last
+    ) - len(timeline) * len(series)
 
     per_year = data.bars_per_year(timeframe)
     weight = 1.0 / len(symbols)
@@ -303,7 +310,9 @@ def run_basket(
             # The account was already gone when the window opened: this leg
             # contributes a flat zero rather than a division by zero.
             rebased = [0.0] * len(curve)
-            warnings.append(f"{symbol}: the account was wiped out before the window opened")
+            warnings.append(
+                f"{symbol}: the account was wiped out before the window opened"
+            )
         else:
             rebased = [value / base for value in curve]
             # Mirror the engine: the last point carries the close of the last bar,
@@ -320,7 +329,11 @@ def run_basket(
         # basket starts later, so they are restated against the capital the leg
         # actually had when the window opened — otherwise a leg that was already
         # up before the window looks like it paid more than it did.
-        fee = engine.fees_in_window(run, leg_costs.rate, start_index) / base if base > 0 else 0.0
+        fee = (
+            engine.fees_in_window(run, leg_costs.rate, start_index) / base
+            if base > 0
+            else 0.0
+        )
         legs.append(
             Leg(
                 symbol=symbol,
@@ -343,12 +356,15 @@ def run_basket(
             engine.buy_and_hold_bars(leg_bars, timeframe, leg_costs).equity
         )
         if legs[-1].open_at_end:
-            warnings.append(f"{symbol}: the leg is still in the market at the end of the window")
+            warnings.append(
+                f"{symbol}: the leg is still in the market at the end of the window"
+            )
 
     # Fixed weights: the basket's return is the weighted sum of the legs' returns,
     # which is `1 + Σ w·(ratio − 1)` — the same identity the portfolio uses.
     equity = [
-        1.0 + sum(leg.weight * (leg.equity[k] - 1.0) for leg in legs) for k in range(len(timeline))
+        1.0 + sum(leg.weight * (leg.equity[k] - 1.0) for leg in legs)
+        for k in range(len(timeline))
     ]
     benchmark_curve = [
         sum(leg.weight * curve[k] for leg, curve in zip(legs, bench_curves))
@@ -382,7 +398,9 @@ def run_basket(
         warnings=warnings,
     )
     if len(symbols) == 1:
-        result.warnings.append("a basket of one leg is just that leg: kcs-backtest says it in more detail")
+        result.warnings.append(
+            "a basket of one leg is just that leg: kcs-backtest says it in more detail"
+        )
     return result
 
 
@@ -412,7 +430,9 @@ def render(result: BasketResult) -> str:
         f"benchmark   : the same {len(result.symbols)} name(s) bought once, in equal parts, at the "
         "window's second open and held"
     )
-    add("execution   : signal on close of t, filled at open of t+1, equity marked at opens")
+    add(
+        "execution   : signal on close of t, filled at open of t+1, equity marked at opens"
+    )
     add("")
     add(
         f"{'leg':<14}{'weight':>8}{'share':>8}{'total':>10}{'CAGR':>9}{'maxDD':>9}{'Sharpe':>8}"
@@ -435,7 +455,9 @@ def render(result: BasketResult) -> str:
         f"allocation  : {1.0 / len(result.symbols):.2%} of the capital per leg at the start, "
         "never rebalanced — so the slices drift with performance"
     )
-    add(f"              weight = the fixed target, share = where the money actually ended up")
+    add(
+        "              weight = the fixed target, share = where the money actually ended up"
+    )
     if len(result.symbols) > 1:
         add(
             f"              by the end each leg owned {low_share:.2%} .. {high_share:.2%} "
@@ -462,21 +484,39 @@ def render(result: BasketResult) -> str:
     def row(label: str, left: str, right: str) -> None:
         add(f"{label:<26}{left:>18}{right:>20}")
 
-    row("total return (net)", pct(result.performance.total_return), pct(result.benchmark.total_return))
+    row(
+        "total return (net)",
+        pct(result.performance.total_return),
+        pct(result.benchmark.total_return),
+    )
     row("CAGR", pct(result.performance.cagr), pct(result.benchmark.cagr))
-    row("annualised vol", pct(result.performance.ann_vol), pct(result.benchmark.ann_vol))
-    row("Sharpe (rf=0)", f"{result.performance.sharpe:.2f}", f"{result.benchmark.sharpe:.2f}")
+    row(
+        "annualised vol", pct(result.performance.ann_vol), pct(result.benchmark.ann_vol)
+    )
+    row(
+        "Sharpe (rf=0)",
+        f"{result.performance.sharpe:.2f}",
+        f"{result.benchmark.sharpe:.2f}",
+    )
     row("max drawdown", pct(result.performance.max_dd), pct(result.benchmark.max_dd))
     row("years", f"{result.performance.years:.2f}", f"{result.benchmark.years:.2f}")
-    row("fees paid (of capital)", pct(result.fees_paid), f"{pct(2 * result.costs.rate)} once")
+    row(
+        "fees paid (of capital)",
+        pct(result.fees_paid),
+        f"{pct(2 * result.costs.rate)} once",
+    )
     add("")
     row(
         "final equity",
         f"{result.performance.final_equity:.4f}x",
         f"{result.benchmark.final_equity:.4f}x",
     )
-    add(f"drawdown span basket   : {iso(result.performance.max_dd_start)} .. {iso(result.performance.max_dd_end)} UTC")
-    add(f"drawdown span B&H      : {iso(result.benchmark.max_dd_start)} .. {iso(result.benchmark.max_dd_end)} UTC")
+    add(
+        f"drawdown span basket   : {iso(result.performance.max_dd_start)} .. {iso(result.performance.max_dd_end)} UTC"
+    )
+    add(
+        f"drawdown span B&H      : {iso(result.benchmark.max_dd_start)} .. {iso(result.benchmark.max_dd_end)} UTC"
+    )
     add(
         "note        : fixed weights, so the basket curve is the weighted sum of the legs' own "
         "curves; each leg's fees are already inside its curve"
@@ -502,7 +542,9 @@ def artifact_stem(result: BasketResult) -> str:
     """
     slug = get_strategy(result.strategy, **result.params).slug
     joined = "+".join(sorted(result.symbols))
-    tag = joined if len(joined) <= 40 else f"{len(result.symbols)}legs-{_digest(joined)}"
+    tag = (
+        joined if len(joined) <= 40 else f"{len(result.symbols)}legs-{_digest(joined)}"
+    )
     window = f"_last{result.window_text}" if result.window_text else ""
     return f"basket_{slug}_{tag}{window}_{result.timeframe}"
 
@@ -522,7 +564,11 @@ def write_equity(path: Path, result: BasketResult) -> None:
         )
         for k, moment in enumerate(result.times):
             writer.writerow(
-                [iso(moment), f"{result.equity[k]:.8f}", f"{result.benchmark_equity[k]:.8f}"]
+                [
+                    iso(moment),
+                    f"{result.equity[k]:.8f}",
+                    f"{result.benchmark_equity[k]:.8f}",
+                ]
                 + [f"{leg.equity[k]:.8f}" for leg in result.legs]
             )
 
@@ -551,7 +597,9 @@ def rebalance_markers(result: BasketResult) -> list[report.Marker]:
         ]
         if not moved:
             continue
-        colour = report.MARKER_ENTRY if invested[k] > invested[k - 1] else report.MARKER_EXIT
+        colour = (
+            report.MARKER_ENTRY if invested[k] > invested[k - 1] else report.MARKER_EXIT
+        )
         action = "in" if invested[k] > invested[k - 1] else "out"
         markers.append(
             (
@@ -582,9 +630,13 @@ def write_chart(path: Path, result: BasketResult) -> None:
     )
 
 
-def write_metrics(path: Path, result: BasketResult, *, include_curves: bool = False) -> None:
+def write_metrics(
+    path: Path, result: BasketResult, *, include_curves: bool = False
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(result.as_dict(include_curves=include_curves), indent=2, default=str))
+    path.write_text(
+        json.dumps(result.as_dict(include_curves=include_curves), indent=2, default=str)
+    )
 
 
 # --- CLI --------------------------------------------------------------------
@@ -667,15 +719,24 @@ def select_by_turnover(
 
     from .portfolio import parse_quotes, read_closes, universes
 
-    symbols = pool if pool is not None else universes(data_dir, timeframe, quotes=parse_quotes(quote))
+    symbols = (
+        pool
+        if pool is not None
+        else universes(data_dir, timeframe, quotes=parse_quotes(quote))
+    )
     scored: list[tuple[str, float]] = []
     for symbol in symbols:
         try:
-            times, _closes, turnover = read_closes(data_dir, symbol, timeframe, with_volume=True)
+            times, _closes, turnover = read_closes(
+                data_dir, symbol, timeframe, with_volume=True
+            )
         except FileNotFoundError:
             continue
-        sample = [value for moment, value in zip(times, turnover)
-                  if reference - lookback <= moment < reference and value > 0]
+        sample = [
+            value
+            for moment, value in zip(times, turnover)
+            if reference - lookback <= moment < reference and value > 0
+        ]
         if len(sample) < max(5, lookback // 86400 // 3):
             continue
         scored.append((symbol, st.median(sample)))
@@ -693,7 +754,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--symbols",
         default=None,
         help="comma-separated legs, e.g. BTC-USDT,ETH-USDT,SOL-USDT; with "
-             "--select-turnover it is the candidate pool instead (omit it to use the archive)",
+        "--select-turnover it is the candidate pool instead (omit it to use the archive)",
     )
     parser.add_argument(
         "--select-turnover",
@@ -701,7 +762,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         metavar="N",
         help="keep the N most traded pairs by median quote turnover just before the "
-             "reported window, so the basket is chosen by a rule rather than by hand",
+        "reported window, so the basket is chosen by a rule rather than by hand",
     )
     parser.add_argument(
         "--select-lookback",
@@ -713,9 +774,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--select-quote",
         default="USDT",
         help="quote currency the candidate pool is filtered to (default: %(default)s; "
-             "use 'any' for every pair on disk)",
+        "use 'any' for every pair on disk)",
     )
-    parser.add_argument("--timeframe", default="1h", help="bar size (default: %(default)s)")
+    parser.add_argument(
+        "--timeframe", default="1h", help="bar size (default: %(default)s)"
+    )
     parser.add_argument(
         "--strategy",
         default="tsmom",
@@ -734,7 +797,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         metavar="PERIOD",
         help="report only the last stretch, e.g. 1y, 6mon, 30d (the legs still see all the "
-             "history before it)",
+        "history before it)",
     )
     parser.add_argument(
         "--from",
@@ -742,7 +805,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         metavar="DATE",
         help="start the reported window here (ISO date, e.g. 2024-10-01); with --to this "
-             "evaluates one stretch, which is what a walk-forward needs",
+        "evaluates one stretch, which is what a walk-forward needs",
     )
     parser.add_argument(
         "--to",
@@ -756,7 +819,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         choices=spreads.SPREAD_MODELS,
         default="none",
         help="charge each leg the spread it actually has, estimated from its own bars "
-             "instead of assuming the flat fee covers everything (default: %(default)s)",
+        "instead of assuming the flat fee covers everything (default: %(default)s)",
     )
     parser.add_argument(
         "--capital",
@@ -764,14 +827,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         metavar="USD",
         help="account size: charge each leg the market impact of *your* order, "
-             "estimated as coefficient * per-bar volatility * sqrt(order / turnover)",
+        "estimated as coefficient * per-bar volatility * sqrt(order / turnover)",
     )
     parser.add_argument(
         "--impact-coefficient",
         type=float,
         default=impact.DEFAULT_COEFFICIENT,
         help="the square-root coefficient (literature band is roughly 0.1-1; "
-             "default: %(default)s)",
+        "default: %(default)s)",
     )
     parser.add_argument(
         "--min-turnover-now",
@@ -779,20 +842,26 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=0.0,
         metavar="USD",
         help="stop holding a pair once its recent turnover falls below this (0 = never); "
-             "the selection picked it when it was liquid, which is no reason to keep it",
+        "the selection picked it when it was liquid, which is no reason to keep it",
     )
     parser.add_argument(
-        "--turnover-window", type=int, default=30, metavar="BARS",
+        "--turnover-window",
+        type=int,
+        default=30,
+        metavar="BARS",
         help="bars the recent-turnover reading looks back over (default: %(default)s)",
     )
     parser.add_argument(
         "--spread-timeframe",
         default="1h",
         help="bars the spread is measured on: a daily high-low range is mostly volatility, "
-             "not spread, so this wants the finest series available (default: %(default)s)",
+        "not spread, so this wants the finest series available (default: %(default)s)",
     )
     parser.add_argument(
-        "--spread-window", type=int, default=500, metavar="BARS",
+        "--spread-window",
+        type=int,
+        default=500,
+        metavar="BARS",
         help="how many bars of that series to measure over (default: %(default)s)",
     )
     parser.add_argument(
@@ -801,11 +870,25 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="drop tokenised equities (AAPLX, TSLAX, ...) from the universe; they trade "
         "like pairs but follow stocks, and the report names any it kept",
     )
-    parser.add_argument("--fee", type=float, default=0.001, help="commission per side (default: %(default)s)")
-    parser.add_argument("--slippage", type=float, default=0.0, help="extra cost per side (default: %(default)s)")
-    parser.add_argument("--data-dir", type=Path, default=DATA_DIR, help="root of the parquet archive")
+    parser.add_argument(
+        "--fee",
+        type=float,
+        default=0.001,
+        help="commission per side (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--slippage",
+        type=float,
+        default=0.0,
+        help="extra cost per side (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--data-dir", type=Path, default=DATA_DIR, help="root of the parquet archive"
+    )
     parser.add_argument("--out-dir", type=Path, default=OUT_DIR)
-    parser.add_argument("--no-artifacts", action="store_true", help="print only, write nothing")
+    parser.add_argument(
+        "--no-artifacts", action="store_true", help="print only, write nothing"
+    )
     parser.add_argument(
         "--journal",
         nargs="?",
@@ -813,17 +896,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         metavar="DIR",
         help="also append the run to the journal (default: journal/ next to the repo root), "
-             "so it can be re-run and checked later with kcs-journal verify",
+        "so it can be re-run and checked later with kcs-journal verify",
     )
     parser.add_argument(
         "--allow-short",
         action="store_true",
         help="let the legs take short exposure; by default the tool refuses it, because a "
-             "spot account cannot hold a negative balance",
+        "spot account cannot hold a negative balance",
     )
     parser.add_argument("--note", default="", help="a human note for the journal entry")
-    parser.add_argument("--json", action="store_true", help="also write the summary as JSON")
-    parser.add_argument("--json-curves", action="store_true", help="include every curve in that JSON")
+    parser.add_argument(
+        "--json", action="store_true", help="also write the summary as JSON"
+    )
+    parser.add_argument(
+        "--json-curves", action="store_true", help="include every curve in that JSON"
+    )
     return parser.parse_args(argv)
 
 
@@ -849,7 +936,9 @@ def main(argv: list[str] | None = None) -> int:
         # pair rather than disappearing.
         pool, equities = data.split_equities(pool, args.exclude_equities)
         if not pool:
-            raise SystemExit("every symbol given was a tokenised equity and --exclude-equities is on")
+            raise SystemExit(
+                "every symbol given was a tokenised equity and --exclude-equities is on"
+            )
     if args.select_turnover is not None:
         if args.select_turnover < 1:
             raise SystemExit("--select-turnover needs a positive count")
@@ -862,30 +951,45 @@ def main(argv: list[str] | None = None) -> int:
 
             pool = universes(args.data_dir, args.timeframe)
         if not pool:
-            raise SystemExit(f"no {args.timeframe} series under {args.data_dir} to choose from")
+            raise SystemExit(
+                f"no {args.timeframe} series under {args.data_dir} to choose from"
+            )
         pool, equities = data.split_equities(pool, args.exclude_equities)
         reference = since or (
             max(
-                (bars[-1].time for symbol in pool
-                 if (bars := _try_series(args.data_dir, symbol, args.timeframe))),
+                (
+                    bars[-1].time
+                    for symbol in pool
+                    if (bars := _try_series(args.data_dir, symbol, args.timeframe))
+                ),
                 default=0,
-            ) - (window or 0)
+            )
+            - (window or 0)
         )
         chosen = select_by_turnover(
-            args.data_dir, args.timeframe, args.select_turnover,
-            lookback=lookback, reference=reference, quote=args.select_quote, pool=pool,
+            args.data_dir,
+            args.timeframe,
+            args.select_turnover,
+            lookback=lookback,
+            reference=reference,
+            quote=args.select_quote,
+            pool=pool,
         )
         if len(chosen) < args.select_turnover:
-            print(f"note: only {len(chosen)} of {args.select_turnover} pairs had enough turnover "
-                  f"history before the window; the basket uses those")
+            print(
+                f"note: only {len(chosen)} of {args.select_turnover} pairs had enough turnover "
+                f"history before the window; the basket uses those"
+            )
         if not chosen:
             raise SystemExit(
                 "no pair traded in the selection window; widen --select-lookback or the pool"
             )
-        print(f"selected by turnover: the {len(chosen)} busiest pairs in the "
-              f"{args.select_lookback} before {data.iso(reference)[:10]} (quote {args.select_quote})")
+        print(
+            f"selected by turnover: the {len(chosen)} busiest pairs in the "
+            f"{args.select_lookback} before {data.iso(reference)[:10]} (quote {args.select_quote})"
+        )
         for symbol, turnover in chosen:
-            print(f"   {symbol:<16} median ${turnover/1e6:,.2f}M per bar")
+            print(f"   {symbol:<16} median ${turnover / 1e6:,.2f}M per bar")
         symbols = [symbol for symbol, _ in chosen]
     else:
         if pool is None:
@@ -901,7 +1005,9 @@ def main(argv: list[str] | None = None) -> int:
         measured: dict[str, float] = {}
         for symbol in symbols:
             try:
-                spread_bars = data.load_series(args.data_dir, symbol, args.spread_timeframe)
+                spread_bars = data.load_series(
+                    args.data_dir, symbol, args.spread_timeframe
+                )
             except FileNotFoundError:
                 continue
             value = spreads.corwin_schultz(
@@ -911,7 +1017,9 @@ def main(argv: list[str] | None = None) -> int:
                 measured[symbol] = value
         missing = [symbol for symbol in symbols if symbol not in measured]
         if missing:
-            notes.append(f"no spread estimate for {', '.join(missing)} (they pay the flat fee)")
+            notes.append(
+                f"no spread estimate for {', '.join(missing)} (they pay the flat fee)"
+            )
         for symbol, value in measured.items():
             extra_per_side[symbol] = extra_per_side.get(symbol, 0.0) + value / 2.0
 
@@ -933,7 +1041,9 @@ def main(argv: list[str] | None = None) -> int:
             per_bar, sigma = stats
             share = impact.participation(weight * args.capital, per_bar)
             value = impact.impact_fraction(
-                weight * args.capital, per_bar, sigma,
+                weight * args.capital,
+                per_bar,
+                sigma,
                 coefficient=args.impact_coefficient,
             )
             if value is None:
@@ -946,20 +1056,24 @@ def main(argv: list[str] | None = None) -> int:
                 )
 
     costs_by_symbol: dict[str, Costs] = {
-        symbol: Costs(
-            fee_per_side=args.fee + extra, slippage_per_side=args.slippage
-        )
+        symbol: Costs(fee_per_side=args.fee + extra, slippage_per_side=args.slippage)
         for symbol, extra in extra_per_side.items()
     }
     if costs_by_symbol:
         charged = {symbol: extra for symbol, extra in extra_per_side.items()}
-        print(f"cost model: fee {args.fee*1e4:.2f}bp per side plus "
-              f"{_cost_model_text(args)}")
-        print(f"   {'symbol':<16}{'per side':>10}{'round trip':>12}{'over the flat fee':>19}")
+        print(
+            f"cost model: fee {args.fee * 1e4:.2f}bp per side plus "
+            f"{_cost_model_text(args)}"
+        )
+        print(
+            f"   {'symbol':<16}{'per side':>10}{'round trip':>12}{'over the flat fee':>19}"
+        )
         for symbol, extra in sorted(charged.items(), key=lambda row: -row[1]):
             total = args.fee + extra
-            print(f"   {symbol:<16}{total*1e4:>8.2f}bp{2*total*1e4:>10.2f}bp"
-                  f"{extra*1e4:>16.2f}bp")
+            print(
+                f"   {symbol:<16}{total * 1e4:>8.2f}bp{2 * total * 1e4:>10.2f}bp"
+                f"{extra * 1e4:>16.2f}bp"
+            )
     for note in notes:
         print(f"note: {note}")
     # One line, after the universe is settled: whether the stock tokens are in it.
@@ -976,12 +1090,17 @@ def main(argv: list[str] | None = None) -> int:
             except FileNotFoundError:
                 continue
             liquid[symbol] = liquidity_mask(
-                times, turnover, minimum=args.min_turnover_now, window=args.turnover_window
+                times,
+                turnover,
+                minimum=args.min_turnover_now,
+                window=args.turnover_window,
             )
         if liquid:
-            print(f"liquidity rule: a leg is held only while its median turnover over the "
-                  f"last {args.turnover_window} bars is at least "
-                  f"${args.min_turnover_now:,.0f}")
+            print(
+                f"liquidity rule: a leg is held only while its median turnover over the "
+                f"last {args.turnover_window} bars is at least "
+                f"${args.min_turnover_now:,.0f}"
+            )
 
     series: dict[str, list[Bar]] = {}
     for symbol in symbols:
@@ -1001,9 +1120,9 @@ def main(argv: list[str] | None = None) -> int:
             params,
             args.timeframe,
             costs=Costs(fee_per_side=args.fee, slippage_per_side=args.slippage),
-            label=f"{args.timeframe} basket" + (
-                f" (last {args.last})" if args.last else ""
-            ) + (f" ({args.since} .. {args.until or 'now'})" if args.since else ""),
+            label=f"{args.timeframe} basket"
+            + (f" (last {args.last})" if args.last else "")
+            + (f" ({args.since} .. {args.until or 'now'})" if args.since else ""),
             window=window,
             window_text=args.last,
             since=since,
@@ -1018,14 +1137,23 @@ def main(argv: list[str] | None = None) -> int:
     if args.journal is not None:
         directory = journal.journal_dir_for(args.journal)
         entry = journal.basket_entry_for(
-            result, series, args.timeframe,
-            window={"seconds": window, "text": args.last, "since": since, "until": until},
+            result,
+            series,
+            args.timeframe,
+            window={
+                "seconds": window,
+                "text": args.last,
+                "since": since,
+                "until": until,
+            },
             costs_by_symbol=costs_by_symbol or None,
             note=args.note,
         )
         path = journal.append(entry, directory)
         print(f"journalized {entry.run_id} -> {path}")
-        print(f"            verify later with: uv run kcs-journal verify --id {entry.run_id}")
+        print(
+            f"            verify later with: uv run kcs-journal verify --id {entry.run_id}"
+        )
 
     if args.no_artifacts:
         return 0

@@ -27,9 +27,13 @@ from __future__ import annotations
 import math
 import statistics
 
-from .data import Bar
 
-__all__ = ["leg_market_stats", "participation", "impact_fraction", "DEFAULT_COEFFICIENT"]
+__all__ = [
+    "leg_market_stats",
+    "participation",
+    "impact_fraction",
+    "DEFAULT_COEFFICIENT",
+]
 
 #: Mild square-root coefficient; the measured band is roughly 0.1-1.
 DEFAULT_COEFFICIENT = 0.1
@@ -59,7 +63,11 @@ def impact_fraction(
 
 
 def leg_market_stats(
-    times: list[int], closes: list[float], turnover: list[float], *, before: int | None = None
+    times: list[int],
+    closes: list[float],
+    turnover: list[float],
+    *,
+    before: int | None = None,
 ) -> tuple[float, float] | None:
     """Median turnover per bar and per-bar volatility, measured strictly before `before`.
 

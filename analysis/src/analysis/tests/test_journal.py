@@ -30,7 +30,15 @@ def build_run(bars, *, window: int = 5, label: str = "sma5"):
     return strategy, result
 
 
-def record(bars, archive: Path, journal_dir: Path, *, symbol: str = "TOY-USDT", window: int = 5, note: str = ""):
+def record(
+    bars,
+    archive: Path,
+    journal_dir: Path,
+    *,
+    symbol: str = "TOY-USDT",
+    window: int = 5,
+    note: str = "",
+):
     strategy, result = build_run(bars, window=window)
     quality = data.data_quality(bars, "1h")
     entry = journal.entry_for(
@@ -139,7 +147,10 @@ def test_recording_is_append_only_and_ids_stay_unique(tmp_path):
     assert len(lines) == 2
     for line in lines:
         json.loads(line)  # every line is independently valid JSON
-    assert [entry.run_id for entry in journal.load_runs(journal_dir)] == [first.run_id, second.run_id]
+    assert [entry.run_id for entry in journal.load_runs(journal_dir)] == [
+        first.run_id,
+        second.run_id,
+    ]
 
 
 def test_the_journal_file_is_human_readable_json_lines(tmp_path):
@@ -151,7 +162,15 @@ def test_the_journal_file_is_human_readable_json_lines(tmp_path):
     payload = json.loads(journal.runs_path(journal_dir).read_text().strip())
     assert payload["run_id"] == entry.run_id
     assert payload["journal_format"] == journal.JOURNAL_FORMAT
-    assert set(payload) >= {"run_id", "recorded_at", "strategy", "params", "costs", "data", "metrics"}
+    assert set(payload) >= {
+        "run_id",
+        "recorded_at",
+        "strategy",
+        "params",
+        "costs",
+        "data",
+        "metrics",
+    }
 
 
 def test_an_empty_journal_reads_as_empty(tmp_path):
@@ -200,7 +219,9 @@ def test_verify_catches_an_edited_bar(archive, tmp_path):
 
     edited = list(bars)
     bar = bars[42]
-    edited[42] = data.Bar(bar.time, bar.open, bar.high, bar.low, bar.close * 1.0001, bar.volume)
+    edited[42] = data.Bar(
+        bar.time, bar.open, bar.high, bar.low, bar.close * 1.0001, bar.volume
+    )
     write_archive(root, "TOY-USDT", "1h", edited, name="all.parquet")
 
     verification = journal.verify(entry, root)
@@ -217,7 +238,9 @@ def test_verify_catches_metrics_edited_by_hand(archive, tmp_path):
     entry.metrics["strategy"]["final_equity"] += 1.0  # wishful thinking
     verification = journal.verify(entry, root)
     assert verification.status == journal.STATUS_MISMATCH
-    assert any(item["field"] == "strategy.final_equity" for item in verification.mismatches)
+    assert any(
+        item["field"] == "strategy.final_equity" for item in verification.mismatches
+    )
 
 
 def test_verify_catches_parameter_edits(archive, tmp_path):
@@ -321,9 +344,9 @@ def test_verify_catches_an_edited_trade_table(archive, tmp_path):
 
     verification = journal.verify(entry, root, journal_dir=journal_dir)
     assert not verification.ok
-    assert any(item["field"] == "trades[0].net_return" for item in verification.mismatches), (
-        verification.mismatches
-    )
+    assert any(
+        item["field"] == "trades[0].net_return" for item in verification.mismatches
+    ), verification.mismatches
 
 
 def test_verify_notices_a_missing_trade_table(archive, tmp_path):
@@ -392,14 +415,29 @@ def test_cli_report_verify_and_show(archive, tmp_path, capsys):
     journal_dir = tmp_path / "journal"
     entry = record(bars, root, journal_dir)
 
-    assert journal.main(["--journal-dir", str(journal_dir), "--data-dir", str(root), "report"]) == 0
+    assert (
+        journal.main(
+            ["--journal-dir", str(journal_dir), "--data-dir", str(root), "report"]
+        )
+        == 0
+    )
     assert entry.run_id in capsys.readouterr().out
 
-    assert journal.main(["--journal-dir", str(journal_dir), "--data-dir", str(root), "verify"]) == 0
+    assert (
+        journal.main(
+            ["--journal-dir", str(journal_dir), "--data-dir", str(root), "verify"]
+        )
+        == 0
+    )
     assert "1/1 runs verified" in capsys.readouterr().out
     assert journal.load_verifications(journal_dir)  # the outcome was recorded
 
-    assert journal.main(["--journal-dir", str(journal_dir), "show", "--id", entry.run_id[:8]]) == 0
+    assert (
+        journal.main(
+            ["--journal-dir", str(journal_dir), "show", "--id", entry.run_id[:8]]
+        )
+        == 0
+    )
     assert entry.run_id in capsys.readouterr().out
 
 
@@ -410,7 +448,9 @@ def test_cli_verify_fails_loudly_on_a_mismatch(archive, tmp_path, capsys):
     entry.metrics["closed_trades"] = 999
     journal.runs_path(journal_dir).write_text(entry.to_json() + "\n")
 
-    code = journal.main(["--journal-dir", str(journal_dir), "--data-dir", str(root), "verify"])
+    code = journal.main(
+        ["--journal-dir", str(journal_dir), "--data-dir", str(root), "verify"]
+    )
     printed = capsys.readouterr().out
     assert code == 1
     assert "0/1 runs verified" in printed
@@ -421,7 +461,19 @@ def test_cli_verify_quiet_only_speaks_on_failure(archive, tmp_path, capsys):
     root, bars = archive
     journal_dir = tmp_path / "journal"
     record(bars, root, journal_dir)
-    assert journal.main(["--journal-dir", str(journal_dir), "--data-dir", str(root), "verify", "--quiet"]) == 0
+    assert (
+        journal.main(
+            [
+                "--journal-dir",
+                str(journal_dir),
+                "--data-dir",
+                str(root),
+                "verify",
+                "--quiet",
+            ]
+        )
+        == 0
+    )
     assert "ok" not in capsys.readouterr().out.splitlines()[0]
 
 
@@ -430,7 +482,17 @@ def test_cli_verify_selects_a_subset(archive, tmp_path, capsys):
     journal_dir = tmp_path / "journal"
     record(bars, root, journal_dir, window=5)
     newest = record(bars, root, journal_dir, window=10)
-    journal.main(["--journal-dir", str(journal_dir), "--data-dir", str(root), "verify", "--last", "1"])
+    journal.main(
+        [
+            "--journal-dir",
+            str(journal_dir),
+            "--data-dir",
+            str(root),
+            "verify",
+            "--last",
+            "1",
+        ]
+    )
     printed = capsys.readouterr().out
     assert newest.run_id in printed
 
@@ -478,7 +540,9 @@ def test_the_journal_directory_is_not_gitignored(tmp_path):
     )
     assert probe.returncode == 1, "journal/ must not be ignored by .gitignore"
     ignored = subprocess.run(
-        ["git", "check-ignore", "-q", "analysis/out/metrics.json"], cwd=repo, capture_output=True
+        ["git", "check-ignore", "-q", "analysis/out/metrics.json"],
+        cwd=repo,
+        capture_output=True,
     )
     assert ignored.returncode == 0, "analysis/out/ is expected to stay ignored"
 
@@ -496,11 +560,23 @@ def _two_leg_archive(tmp_path: Path) -> Path:
 def _journal_a_basket(root: Path, journal_dir: Path, capsys) -> journal.RunEntry:
     from .. import basket
 
-    code = basket.main([
-        "--data-dir", str(root), "--timeframe", "1h",
-        "--symbols", "AAA-USDT,BBB-USDT", "--strategy", "sma", "--param", "window=20",
-        "--journal", str(journal_dir), "--no-artifacts",
-    ])
+    code = basket.main(
+        [
+            "--data-dir",
+            str(root),
+            "--timeframe",
+            "1h",
+            "--symbols",
+            "AAA-USDT,BBB-USDT",
+            "--strategy",
+            "sma",
+            "--param",
+            "window=20",
+            "--journal",
+            str(journal_dir),
+            "--no-artifacts",
+        ]
+    )
     printed = capsys.readouterr().out
     assert code == 0
     assert "journalized" in printed
@@ -516,8 +592,8 @@ def test_a_basket_run_can_be_journaled_and_verified(tmp_path: Path, capsys):
     assert entry.kind == journal.KIND_BASKET
     assert entry.data is None
     assert entry.symbols == ["AAA-USDT", "BBB-USDT"]
-    assert entry.bars == 800                      # both legs, whole history
-    assert "basket" in entry.run_id               # and an id that is easy to type
+    assert entry.bars == 800  # both legs, whole history
+    assert "basket" in entry.run_id  # and an id that is easy to type
 
     check = journal.verify(entry, root, journal_dir=None)
     assert check.status == journal.STATUS_VERIFIED, check.message
@@ -544,7 +620,9 @@ def test_a_basket_entry_survives_the_archive_growing(tmp_path: Path, capsys):
 
     # a later backfill appends bars; the recorded window is what has to reproduce
     grown = make_bars(wavy(400), start=START + 400 * STEP)
-    write_archive(root, "AAA-USDT", "1h", make_bars(wavy(400)) + grown, name="all.parquet")
+    write_archive(
+        root, "AAA-USDT", "1h", make_bars(wavy(400)) + grown, name="all.parquet"
+    )
 
     check = journal.verify(entry, root, journal_dir=None)
     assert check.status == journal.STATUS_VERIFIED, check.message
@@ -556,12 +634,27 @@ def test_a_basket_entry_remembers_per_leg_spread_costs(tmp_path: Path, capsys):
 
     root = _two_leg_archive(tmp_path)
     journal_dir = tmp_path / "journal"
-    code = basket.main([
-        "--data-dir", str(root), "--timeframe", "1h",
-        "--symbols", "AAA-USDT,BBB-USDT", "--strategy", "sma", "--param", "window=20",
-        "--spread-model", "corwin-schultz", "--spread-window", "50",
-        "--journal", str(journal_dir), "--no-artifacts",
-    ])
+    code = basket.main(
+        [
+            "--data-dir",
+            str(root),
+            "--timeframe",
+            "1h",
+            "--symbols",
+            "AAA-USDT,BBB-USDT",
+            "--strategy",
+            "sma",
+            "--param",
+            "window=20",
+            "--spread-model",
+            "corwin-schultz",
+            "--spread-window",
+            "50",
+            "--journal",
+            str(journal_dir),
+            "--no-artifacts",
+        ]
+    )
     capsys.readouterr()
     assert code == 0
     entry = journal.load_runs(journal_dir)[0]

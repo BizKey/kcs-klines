@@ -155,7 +155,9 @@ def _tsmom_ls(
     **_: object,
 ) -> Strategy:
     """Long or short on the sign of the N-bar return, decided every M bars."""
-    return Tsmom(lookback=lookback, rebalance=rebalance, mode="long-short", threshold=threshold)
+    return Tsmom(
+        lookback=lookback, rebalance=rebalance, mode="long-short", threshold=threshold
+    )
 
 
 def on_decision_grid(
@@ -191,7 +193,9 @@ def on_decision_grid(
 
     step = bar_step(bars)
     period = rebalance * step
-    grid = -(-bars[start].time // period) * period  # ceiling division: the next grid point
+    grid = (
+        -(-bars[start].time // period) * period
+    )  # ceiling division: the next grid point
     held = 0.0
     for i, bar in enumerate(bars):
         if i >= start and bar.time >= grid:
@@ -252,7 +256,11 @@ class BlendTsmom(Strategy):
 
     @property
     def params(self) -> dict:
-        return {"base": self.base, "horizons": self.horizons, "rebalance": self.rebalance}
+        return {
+            "base": self.base,
+            "horizons": self.horizons,
+            "rebalance": self.rebalance,
+        }
 
     def scores(self, bars: list[Bar]) -> list[float | None]:
         """Mean of `sign(return over each horizon)`, `None` until the longest exists."""

@@ -72,7 +72,10 @@ class SmaTrend(Strategy):
     def targets(self, bars: list[Bar]) -> list[float]:
         scores = self.scores(bars)
         if self.rebalance == 1:
-            return [0.0 if score is None else (1.0 if score > 0 else 0.0) for score in scores]
+            return [
+                0.0 if score is None else (1.0 if score > 0 else 0.0)
+                for score in scores
+            ]
         return on_decision_grid(scores, bars, self.rebalance)
 
     def describe(self) -> str:

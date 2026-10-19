@@ -86,12 +86,32 @@ CLAIMS: tuple[Claim, ...] = (
         name="basket-10-turnover",
         what="the recommended stack over five years: the ten busiest pairs, each gated by its own 50-bar mean, book sized to 30% volatility",
         argv=[
-            "analysis.basket", "--select-turnover", "10", "--timeframe", "1d",
-            "--strategy", "voltarget-sma", "--param", "window=50",
-            "--param", "target_vol=0.30", "--last", "5y",
+            "analysis.basket",
+            "--select-turnover",
+            "10",
+            "--timeframe",
+            "1d",
+            "--strategy",
+            "voltarget-sma",
+            "--param",
+            "window=50",
+            "--param",
+            "target_vol=0.30",
+            # Pinned to dates rather than `--last 5y`: the claim is about a stretch, and
+            # `--last` slides with the newest bar, so every collector run moved the window,
+            # re-dated the turnover selection and failed this check on growth alone. The
+            # selection reference is `--from`, so pinning it freezes the names too.
+            "--from",
+            "2021-10-02",
+            "--to",
+            "2026-10-01",
         ],
         metrics_key="basket",
-        expectations={"total_return": (91.43, 5.0), "sharpe": (0.87, 0.08), "max_dd": (-17.5, 5.0)},
+        expectations={
+            "total_return": (91.43, 5.0),
+            "sharpe": (0.87, 0.08),
+            "max_dd": (-17.5, 5.0),
+        },
         doc_quotes=[r"\+91\.43% at Sharpe 0\.87", r"−17\.5%"],
         heavy=True,
     ),
@@ -99,22 +119,49 @@ CLAIMS: tuple[Claim, ...] = (
         name="basket-10-turnover-spread",
         what="the same book, charging each leg the spread estimated from its own bars (Corwin-Schultz)",
         argv=[
-            "analysis.basket", "--select-turnover", "10", "--timeframe", "1d",
-            "--strategy", "voltarget-sma", "--param", "window=50",
-            "--param", "target_vol=0.30", "--last", "5y",
-            "--spread-model", "corwin-schultz",
+            "analysis.basket",
+            "--select-turnover",
+            "10",
+            "--timeframe",
+            "1d",
+            "--strategy",
+            "voltarget-sma",
+            "--param",
+            "window=50",
+            "--param",
+            "target_vol=0.30",
+            "--from",
+            "2021-10-02",
+            "--to",
+            "2026-10-01",
+            "--spread-model",
+            "corwin-schultz",
         ],
         metrics_key="basket",
-        expectations={"total_return": (86.05, 3.0), "sharpe": (0.83, 0.08)},
-        doc_quotes=[r"\+86\.05% at 0\.83"],
+        # Re-measured on 2026-10-19: the per-leg spread estimates are read from the **hourly**
+        # archive before the window, and a backfill there moved them (BTC read 5.6 bp on the
+        # snapshot this number was first written from, 21.9 bp on the current one), so the
+        # spread-model figure is the softer of the two claims. The fee-only claim above
+        # reproduces to the basis point on the same pinned window.
+        expectations={"total_return": (76.57, 3.0), "sharpe": (0.76, 0.08)},
+        doc_quotes=[r"\+76\.57% at 0\.76"],
         heavy=True,
     ),
     Claim(
         name="tsmom-btc-daily-30-7",
         what="time-series momentum, 30-day lookback decided weekly, on BTC daily over the whole archive",
         argv=[
-            "analysis.run_backtest", "--symbol", "BTC-USDT", "--timeframe", "1d",
-            "--strategy", "tsmom", "--param", "lookback=30", "--param", "rebalance=7",
+            "analysis.run_backtest",
+            "--symbol",
+            "BTC-USDT",
+            "--timeframe",
+            "1d",
+            "--strategy",
+            "tsmom",
+            "--param",
+            "lookback=30",
+            "--param",
+            "rebalance=7",
         ],
         metrics_key="strategy",
         expectations={"total_return": (2369.0, "5%"), "sharpe": (0.79, 0.08)},
@@ -125,11 +172,24 @@ CLAIMS: tuple[Claim, ...] = (
         name="wide-book-gated",
         what="the whole USDT archive as one book: sign filter, weekly, trend gate 200",
         argv=[
-            "analysis.portfolio", "--timeframe", "1d", "--lookback", "7", "--rebalance", "7",
-            "--select", "sign", "--trend-gate", "200",
+            "analysis.portfolio",
+            "--timeframe",
+            "1d",
+            "--lookback",
+            "7",
+            "--rebalance",
+            "7",
+            "--select",
+            "sign",
+            "--trend-gate",
+            "200",
         ],
         metrics_key="performance",
-        expectations={"total_return": (2675.0, "5%"), "sharpe": (0.49, 0.06), "max_dd": (-86.8, 4.0)},
+        expectations={
+            "total_return": (2675.0, "5%"),
+            "sharpe": (0.49, 0.06),
+            "max_dd": (-86.8, 4.0),
+        },
         doc_quotes=[r"\+2,675%", r"\−86\.8%"],
         json_style="path",
         heavy=True,
@@ -138,11 +198,26 @@ CLAIMS: tuple[Claim, ...] = (
         name="wide-book-gated-voltarget",
         what="the same book with the whole thing sized to a 25% volatility target",
         argv=[
-            "analysis.portfolio", "--timeframe", "1d", "--lookback", "7", "--rebalance", "7",
-            "--select", "sign", "--trend-gate", "200", "--vol-target", "25%",
+            "analysis.portfolio",
+            "--timeframe",
+            "1d",
+            "--lookback",
+            "7",
+            "--rebalance",
+            "7",
+            "--select",
+            "sign",
+            "--trend-gate",
+            "200",
+            "--vol-target",
+            "25%",
         ],
         metrics_key="performance",
-        expectations={"total_return": (655.0, "6%"), "sharpe": (0.73, 0.06), "max_dd": (-53.8, 4.0)},
+        expectations={
+            "total_return": (655.0, "6%"),
+            "sharpe": (0.73, 0.06),
+            "max_dd": (-53.8, 4.0),
+        },
         doc_quotes=[r"\+655%", r"−53\.8%"],
         json_style="path",
         heavy=True,
@@ -151,8 +226,19 @@ CLAIMS: tuple[Claim, ...] = (
         name="walkforward-btc-blend",
         what="the out-of-sample blend on BTC that AGENTS.md calls the best return measured here (CONCLUSIONS 1.13)",
         argv=[
-            "analysis.walkforward", "--symbol", "BTC-USDT", "--timeframe", "1d",
-            "--strategy", "tsmom-blend", "--grid", "base=7", "--train", "300", "--test", "60",
+            "analysis.walkforward",
+            "--symbol",
+            "BTC-USDT",
+            "--timeframe",
+            "1d",
+            "--strategy",
+            "tsmom-blend",
+            "--grid",
+            "base=7",
+            "--train",
+            "300",
+            "--test",
+            "60",
         ],
         metrics_key="out_of_sample",
         expectations={"total_return": (3097.0, "5%"), "sharpe": (1.13, 0.08)},
@@ -164,11 +250,22 @@ CLAIMS: tuple[Claim, ...] = (
         name="riskparity-top5-trend",
         what="the rule-picked book with a trend gate: top five by trailing turnover, three years of history, 40% volatility budget, 200-day trend exit",
         argv=[
-            "analysis.riskparity", "--top", "5", "--min-history", "3y", "--vol-budget", "0.4",
-            "--trend", "200d",
+            "analysis.riskparity",
+            "--top",
+            "5",
+            "--min-history",
+            "3y",
+            "--vol-budget",
+            "0.4",
+            "--trend",
+            "200d",
         ],
         metrics_key="performance",
-        expectations={"total_return": (868.0, "6%"), "sharpe": (0.68, 0.08), "max_dd": (-47.7, 5.0)},
+        expectations={
+            "total_return": (868.0, "6%"),
+            "sharpe": (0.68, 0.08),
+            "max_dd": (-47.7, 5.0),
+        },
         doc_quotes=[r"\+868% at Sharpe 0\.68"],
         heavy=True,
         known=True,
@@ -186,14 +283,35 @@ def repo_facts() -> list[tuple[str, str, str, float]]:
     """
     collected = subprocess.run(
         [sys.executable, "-m", "pytest", "--collect-only", "-q"],
-        cwd=REPO, capture_output=True, text=True, check=False,
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     # `-q --collect-only` prints one `path: count` line per test module.
-    per_file = [int(count) for count in re.findall(r":\s*(\d+)\s*$", collected.stdout, re.MULTILINE)]
+    per_file = [
+        int(count)
+        for count in re.findall(r":\s*(\d+)\s*$", collected.stdout, re.MULTILINE)
+    ]
     tests = str(sum(per_file)) if per_file else None
+    # Count with the interpreter running this checker rather than `uv run`: `uv` is not
+    # guaranteed to be on PATH (it is not in the environment this audit runs in), and a
+    # missing command with check=False silently yields empty output — which then reads as
+    # "0 strategies registered" and fails the gate with a lie. An empty list is an error in
+    # the check, not a fact about the repository.
     listed = subprocess.run(
-        ["uv", "run", "kcs-backtest", "--list"], cwd=REPO, capture_output=True, text=True, check=False
+        [sys.executable, "-m", "analysis.run_backtest", "--list"],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        check=False,
     )
+    if not listed.stdout.strip():
+        raise RuntimeError(
+            "could not list the strategies (no output from "
+            "`python -m analysis.run_backtest --list`): "
+            f"exit {listed.returncode}, stderr: {listed.stderr.strip()[:300]}"
+        )
     strategies = len(re.findall(r"^  [a-z]", listed.stdout, flags=re.MULTILINE))
     return [
         ("pytest tests", tests or "?", r"(\d+) tests", 0.03),
@@ -205,7 +323,9 @@ def discover_json(out_dir: Path, explicit: Path | None) -> Path:
     """The metrics JSON a run wrote, wherever that CLI puts it."""
     if explicit is not None and explicit.is_file():
         return explicit
-    found = sorted(glob.glob(str(out_dir / "*.json")), key=lambda path: Path(path).stat().st_mtime)
+    found = sorted(
+        glob.glob(str(out_dir / "*.json")), key=lambda path: Path(path).stat().st_mtime
+    )
     if not found:
         raise FileNotFoundError(f"no JSON summary under {out_dir}")
     return Path(found[-1])
@@ -234,7 +354,9 @@ def run_claim(claim: Claim, timeout: int) -> tuple[dict, str]:
         payload = json.loads(discover_json(out_dir, explicit).read_text())
         metrics = payload.get(claim.metrics_key)
         if not isinstance(metrics, dict):
-            raise KeyError(f"{claim.name}: no {claim.metrics_key!r} block in the JSON summary")
+            raise KeyError(
+                f"{claim.name}: no {claim.metrics_key!r} block in the JSON summary"
+            )
         return metrics, completed.stdout
 
 
@@ -243,7 +365,9 @@ def check_claim(claim: Claim, timeout: int) -> tuple[bool, list[str]]:
     lines: list[str] = []
     ok = True
     if claim.known:
-        lines.append("    OPEN — a documented discrepancy, not a failure (see experiments/README.md)")
+        lines.append(
+            "    OPEN — a documented discrepancy, not a failure (see experiments/README.md)"
+        )
 
     documents = {path: path.read_text() for path in claim.documents}
     where = " or ".join(path.name for path in documents)
@@ -256,7 +380,12 @@ def check_claim(claim: Claim, timeout: int) -> tuple[bool, list[str]]:
 
     try:
         metrics, _ = run_claim(claim, timeout)
-    except (RuntimeError, FileNotFoundError, KeyError, subprocess.TimeoutExpired) as error:
+    except (
+        RuntimeError,
+        FileNotFoundError,
+        KeyError,
+        subprocess.TimeoutExpired,
+    ) as error:
         return False, lines + [f"    RUN FAILED: {error}"]
 
     for metric, (documented, tolerance) in claim.expectations.items():
@@ -288,9 +417,15 @@ def main(argv: list[str] | None = None) -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument("--list", action="store_true", help="print the claims and exit")
-    parser.add_argument("--only", action="append", default=[], help="run one claim by name (repeatable)")
-    parser.add_argument("--quick", action="store_true", help="skip the claims that take minutes")
-    parser.add_argument("--timeout", type=int, default=3600, help="per-claim timeout in seconds")
+    parser.add_argument(
+        "--only", action="append", default=[], help="run one claim by name (repeatable)"
+    )
+    parser.add_argument(
+        "--quick", action="store_true", help="skip the claims that take minutes"
+    )
+    parser.add_argument(
+        "--timeout", type=int, default=3600, help="per-claim timeout in seconds"
+    )
     args = parser.parse_args(argv)
 
     selected = [claim for claim in CLAIMS if not args.only or claim.name in args.only]
@@ -305,7 +440,9 @@ def main(argv: list[str] | None = None) -> int:
         for claim in CLAIMS:
             weight = "heavy" if claim.heavy else "fast "
             print(f"{claim.name:<28}{weight}  {claim.what}")
-        print(f"\n{len(CLAIMS)} claims; `--quick` runs the {sum(not c.heavy for c in CLAIMS)} fast ones")
+        print(
+            f"\n{len(CLAIMS)} claims; `--quick` runs the {sum(not c.heavy for c in CLAIMS)} fast ones"
+        )
         return 0
 
     failures: list[str] = []
@@ -324,10 +461,13 @@ def main(argv: list[str] | None = None) -> int:
             # A tolerance of zero means the number has to match exactly; otherwise it
             # is a fraction of it, and a snapshot that has drifted is a real finding.
             agree = any(
-                abs(measured - float(quote)) <= max(tolerance * measured, 0 if tolerance else 0.5)
+                abs(measured - float(quote))
+                <= max(tolerance * measured, 0 if tolerance else 0.5)
                 for quote in quoted
             )
-        print(f"  {'ok  ' if agree else 'DIFF'} {name:<24} measured {value:<6} documents say {', '.join(sorted(set(quoted))) or '—'}")
+        print(
+            f"  {'ok  ' if agree else 'DIFF'} {name:<24} measured {value:<6} documents say {', '.join(sorted(set(quoted))) or '—'}"
+        )
         if not agree:
             failures.append(name)
 
@@ -342,7 +482,9 @@ def main(argv: list[str] | None = None) -> int:
     open_claims = [claim.name for claim in selected if claim.known]
     print()
     if open_claims:
-        print(f"open discrepancies (documented, not failures): {', '.join(open_claims)}")
+        print(
+            f"open discrepancies (documented, not failures): {', '.join(open_claims)}"
+        )
     if failures:
         print(f"FAILED: {', '.join(failures)}")
         print(

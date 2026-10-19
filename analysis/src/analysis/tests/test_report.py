@@ -19,7 +19,11 @@ def chart(tmp_path: Path, markers, curves=None, name="chart.svg") -> str:
     report.write_curves(
         path,
         TIMES,
-        curves or {"strategy": [1.0, 1.1, 1.05, 1.3, 1.2, 1.5, 0.9, 1.4, 1.6], "buy & hold": [1.0] * 9},
+        curves
+        or {
+            "strategy": [1.0, 1.1, 1.05, 1.3, 1.2, 1.5, 0.9, 1.4, 1.6],
+            "buy & hold": [1.0] * 9,
+        },
         "a test chart",
         markers=markers,
     )
@@ -67,7 +71,10 @@ def test_positions_must_match_the_timeline():
 
 
 def test_markers_are_drawn_behind_the_curves_and_tallied(tmp_path: Path):
-    text = chart(tmp_path, report.position_markers(TIMES, [0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]))
+    text = chart(
+        tmp_path,
+        report.position_markers(TIMES, [0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+    )
     assert text.count("<polyline") == 2
     assert text.count('class="position-change"') == 2
     assert 'stroke="#137333"' in text  # the entry
@@ -85,8 +92,14 @@ def test_a_chart_without_markers_says_nothing_about_them(tmp_path: Path):
 
 
 def test_more_markers_are_drawn_fainter(tmp_path: Path):
-    few = chart(tmp_path, [(i, report.MARKER_ENTRY, "x") for i in range(1, 4)], name="few.svg")
-    many = chart(tmp_path, [(i % 8 + 1, report.MARKER_ENTRY, "x") for i in range(1000)], name="many.svg")
+    few = chart(
+        tmp_path, [(i, report.MARKER_ENTRY, "x") for i in range(1, 4)], name="few.svg"
+    )
+    many = chart(
+        tmp_path,
+        [(i % 8 + 1, report.MARKER_ENTRY, "x") for i in range(1000)],
+        name="many.svg",
+    )
     assert 'stroke-opacity="0.90"' in few
     assert 'stroke-opacity="0.15"' in many
 
@@ -127,9 +140,13 @@ def test_a_chart_without_levels_has_no_dashed_lines(tmp_path: Path):
 def test_a_level_for_a_missing_curve_or_a_bad_value_is_rejected(tmp_path: Path):
     path = tmp_path / "bad.svg"
     with pytest.raises(ValueError, match="not one of the curves"):
-        report.write_curves(path, TIMES, {"strategy": [1.0] * 9}, "x", levels={"nope": 2.0})
+        report.write_curves(
+            path, TIMES, {"strategy": [1.0] * 9}, "x", levels={"nope": 2.0}
+        )
     with pytest.raises(ValueError, match="must be positive"):
-        report.write_curves(path, TIMES, {"strategy": [1.0] * 9}, "x", levels={"strategy": 0.0})
+        report.write_curves(
+            path, TIMES, {"strategy": [1.0] * 9}, "x", levels={"strategy": 0.0}
+        )
 
 
 def test_the_chart_shows_the_headline_multiple(tmp_path: Path):
@@ -151,7 +168,10 @@ def test_marker_lines_stay_inside_the_plot_area(tmp_path: Path):
     positions[1], positions[2] = 1.0, 0.0  # a change early on too
     text = chart(tmp_path, report.position_markers(TIMES, positions))
     spans = [
-        (float(part.split('x1="')[1].split('"')[0]), float(part.split('x2="')[1].split('"')[0]))
+        (
+            float(part.split('x1="')[1].split('"')[0]),
+            float(part.split('x2="')[1].split('"')[0]),
+        )
         for part in text.split('<g class="position-change">')[1:]
     ]
     assert spans
@@ -178,7 +198,11 @@ def test_the_backtest_chart_marks_every_trade(tmp_path: Path):
     path = tmp_path / "chart.svg"
     report.write_chart(path, bars, result, "test")
     text = path.read_text()
-    changes = sum(1 for i in range(1, len(result.positions)) if result.positions[i] != result.positions[i - 1])
+    changes = sum(
+        1
+        for i in range(1, len(result.positions))
+        if result.positions[i] != result.positions[i - 1]
+    )
     assert changes > 0
     assert text.count('class="position-change"') == changes
     assert "position changes:" in text

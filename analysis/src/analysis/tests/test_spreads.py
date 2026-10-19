@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 
 from .. import basket, spreads
 from .conftest import START, STEP, make_bars, ramp
 
 
-def _bars(high_low: float, count: int = 300, *, start: int = START, spacing: int = STEP):
+def _bars(
+    high_low: float, count: int = 300, *, start: int = START, spacing: int = STEP
+):
     """A flat price with a high-low range of `high_low` percent of it, bar after bar.
 
     With no net move the two-day range is exactly one bar's range, so the estimator reads
@@ -40,7 +41,7 @@ def test_a_wider_high_low_range_reads_as_a_wider_spread():
     wide = spreads.corwin_schultz(_bars(2.0))
     assert calm is not None and wide is not None
     assert 0.0 < calm < wide
-    assert wide < 1.0                      # a fraction, not a percentage
+    assert wide < 1.0  # a fraction, not a percentage
 
 
 def test_the_estimate_is_a_fraction_and_never_negative():
@@ -63,8 +64,12 @@ def test_the_estimate_never_reads_a_bar_at_or_after_the_cutoff():
     for index in range(120, len(rewritten)):
         bar = rewritten[index]
         rewritten[index] = type(bar)(
-            time=bar.time, open=bar.open, high=bar.high * 3, low=bar.low,
-            close=bar.close, volume=bar.volume,
+            time=bar.time,
+            open=bar.open,
+            high=bar.high * 3,
+            low=bar.low,
+            close=bar.close,
+            volume=bar.volume,
         )
     assert spreads.corwin_schultz(rewritten, before=cut) == before
 
@@ -94,12 +99,25 @@ def test_the_basket_can_charge_each_leg_its_own_spread(tmp_path: Path, capsys):
         bars = _bars(high_low)
         write_archive(root, symbol, "1d", bars)
         write_archive(root, symbol, "1h", bars)
-    code = basket.main([
-        "--data-dir", str(root), "--timeframe", "1d",
-        "--symbols", "UP-USDT,MID-USDT", "--strategy", "sma", "--param", "window=20",
-        "--spread-model", "corwin-schultz", "--spread-window", "100",
-        "--no-artifacts",
-    ])
+    code = basket.main(
+        [
+            "--data-dir",
+            str(root),
+            "--timeframe",
+            "1d",
+            "--symbols",
+            "UP-USDT,MID-USDT",
+            "--strategy",
+            "sma",
+            "--param",
+            "window=20",
+            "--spread-model",
+            "corwin-schultz",
+            "--spread-window",
+            "100",
+            "--no-artifacts",
+        ]
+    )
     printed = capsys.readouterr().out
     assert code == 0
     assert "cost model: fee" in printed and "corwin-schultz half-spreads" in printed
@@ -113,16 +131,32 @@ def test_the_basket_can_charge_each_leg_its_own_spread(tmp_path: Path, capsys):
     assert rows["UP-USDT"] < rows["MID-USDT"]
 
 
-def test_a_leg_without_a_spread_estimate_falls_back_to_the_flat_fee(tmp_path: Path, capsys):
+def test_a_leg_without_a_spread_estimate_falls_back_to_the_flat_fee(
+    tmp_path: Path, capsys
+):
     root = tmp_path / "spot"
     from .conftest import write_archive
 
     write_archive(root, "ONLY-USDT", "1d", _bars(0.5))
-    code = basket.main([
-        "--data-dir", str(root), "--timeframe", "1d", "--symbols", "ONLY-USDT",
-        "--strategy", "sma", "--param", "window=20", "--spread-model", "corwin-schultz",
-        "--spread-timeframe", "1h", "--no-artifacts",
-    ])
+    code = basket.main(
+        [
+            "--data-dir",
+            str(root),
+            "--timeframe",
+            "1d",
+            "--symbols",
+            "ONLY-USDT",
+            "--strategy",
+            "sma",
+            "--param",
+            "window=20",
+            "--spread-model",
+            "corwin-schultz",
+            "--spread-timeframe",
+            "1h",
+            "--no-artifacts",
+        ]
+    )
     printed = capsys.readouterr().out
     assert code == 0
     assert "no spread estimate" in printed

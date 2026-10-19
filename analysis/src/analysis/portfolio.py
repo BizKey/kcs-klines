@@ -38,7 +38,7 @@ import bisect
 import json
 import math
 import statistics
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import Costs, data, metrics, report
@@ -94,9 +94,9 @@ class VolTarget:
     contains the multiplier and turn the dial into a feedback loop.
     """
 
-    target: float = 0.0        # 0 = off
-    window: int = 12           # rebalance periods, not bars
-    cap: float = 1.0           # never gear up beyond this
+    target: float = 0.0  # 0 = off
+    window: int = 12  # rebalance periods, not bars
+    cap: float = 1.0  # never gear up beyond this
     floor: float = 0.0
 
     def __post_init__(self) -> None:
@@ -133,16 +133,19 @@ class GateSpec:
     of them is on.
     """
 
-    trend_bars: int = 0              # price must be above its own mean of this many bars
-    trend_threshold: float = 0.0     # ... by at least this much (0 = merely above)
-    max_below_peak: float = 0.0      # drop names this far below their own running peak
-    min_turnover: float = 0.0        # median quote turnover per bar, gate window
-    min_volatility: float = 0.0      # annualised volatility floor (drops dead pairs)
+    trend_bars: int = 0  # price must be above its own mean of this many bars
+    trend_threshold: float = 0.0  # ... by at least this much (0 = merely above)
+    max_below_peak: float = 0.0  # drop names this far below their own running peak
+    min_turnover: float = 0.0  # median quote turnover per bar, gate window
+    min_volatility: float = 0.0  # annualised volatility floor (drops dead pairs)
 
     @property
     def active(self) -> bool:
         return bool(
-            self.trend_bars or self.max_below_peak or self.min_turnover or self.min_volatility
+            self.trend_bars
+            or self.max_below_peak
+            or self.min_turnover
+            or self.min_volatility
         )
 
     def describe(self) -> str:
@@ -295,7 +298,10 @@ class PortfolioResult:
             "dropped_marks": self.dropped,
             "performance": self.performance.as_dict(),
             "buy_and_hold_equal_weight": self.benchmark.as_dict(),
-            "costs": {"fee_per_side": self.costs.fee_per_side, "slippage_per_side": self.costs.slippage_per_side},
+            "costs": {
+                "fee_per_side": self.costs.fee_per_side,
+                "slippage_per_side": self.costs.slippage_per_side,
+            },
             "last_rebalance": (
                 {
                     "time": self.rebalances[-1].time,
@@ -372,7 +378,9 @@ def build_panel(
     momentum: list[float | None] = []
     for date, value in zip(dates, sampled):
         past = close_at(times, closes, date - lookback_seconds, max_age)
-        momentum.append(None if value is None or past in (None, 0) else value / past - 1.0)
+        momentum.append(
+            None if value is None or past in (None, 0) else value / past - 1.0
+        )
 
     gates: dict[str, list[float | None]] = {}
     if trend_bars or turnover is not None or gate_seconds:
@@ -402,14 +410,14 @@ def build_panel(
                 else None
             )
             window = [
-                moment for moment in times if date - (gate_seconds or 0) < moment <= date
+                moment
+                for moment in times
+                if date - (gate_seconds or 0) < moment <= date
             ]
             start = bisect.bisect_right(times, date - (gate_seconds or 0))
             if gate_seconds and index - start >= 3:
                 turns = sorted(turnover[start:index]) if turnover else []
-                liquid.append(
-                    turns[len(turns) // 2] if turns else None
-                )
+                liquid.append(turns[len(turns) // 2] if turns else None)
                 moves = [
                     math.log(closes[i] / closes[i - 1])
                     for i in range(start + 1, index)
@@ -465,7 +473,9 @@ def read_closes(
 
     files = data.series_files(data_dir, symbol, timeframe)
     if not files:
-        raise FileNotFoundError(f"no parquet files for {symbol} {timeframe} under {data_dir}")
+        raise FileNotFoundError(
+            f"no parquet files for {symbol} {timeframe} under {data_dir}"
+        )
     wanted = ["time", "close", "volume"] if with_volume else ["time", "close"]
     pairs: dict[int, tuple[float, float]] = {}
     for path in files:
@@ -474,7 +484,11 @@ def read_closes(
         # The collector stores quote turnover as its own column (what the exchange
         # reported); `close * volume` is the same quantity to within a bar's move and is
         # only a fallback. A liquidity gate should read the number, not re-derive it.
-        stored = pq.read_table(path, columns=["turnover"]).to_pydict().get("turnover") if with_volume else None
+        stored = (
+            pq.read_table(path, columns=["turnover"]).to_pydict().get("turnover")
+            if with_volume
+            else None
+        )
         for index, moment in enumerate(columns["time"]):
             close = columns["close"][index]
             if stored is not None and index < len(stored) and stored[index]:
@@ -495,7 +509,9 @@ def threshold_of(spec: str) -> float:
     try:
         value = float(text)
     except ValueError:
-        raise SystemExit(f"--threshold needs a number like 0 or 5%, got {spec!r}") from None
+        raise SystemExit(
+            f"--threshold needs a number like 0 or 5%, got {spec!r}"
+        ) from None
     return value / 100.0 if spec.strip().endswith("%") else value
 
 
@@ -596,7 +612,7 @@ def run_portfolio(
     wiped_out: int | None = None
     gated_total = 0
     vol = vol_target or VolTarget()
-    book_returns: list[float] = []      # the unscaled book's own period returns
+    book_returns: list[float] = []  # the unscaled book's own period returns
     scales: list[float] = []
     for k in range(len(dates) - 1):
         momentum = {}
@@ -653,7 +669,9 @@ def run_portfolio(
         # commission would silently vanish from the result.
         value = max(equity[-1] - cost, 0.0)
         weights = targets
-        rebalances.append(Rebalance(k, dates[k], longs, shorts, turnover, len(momentum)))
+        rebalances.append(
+            Rebalance(k, dates[k], longs, shorts, turnover, len(momentum))
+        )
         if not targets:
             # Nothing qualified: the book goes to cash and pays to get there. This is
             # the sign rule's normal state in a falling market, not an edge case.
@@ -762,7 +780,9 @@ def run_portfolio(
     return result
 
 
-def equal_weight_benchmark(panels: list[Panel], dates: list[int], costs: Costs) -> list[float]:
+def equal_weight_benchmark(
+    panels: list[Panel], dates: list[int], costs: Costs
+) -> list[float]:
     """Equal weight the whole universe: buy each symbol when it first appears, never rebalance.
 
     Weighting is fixed at `1 / universe`, so a symbol that lists halfway through
@@ -775,7 +795,9 @@ def equal_weight_benchmark(panels: list[Panel], dates: list[int], costs: Costs) 
     weight = 1.0 / len(panels)
     entries: list[int | None] = []
     for panel in panels:
-        entries.append(next((k for k, close in enumerate(panel.closes) if close is not None), None))
+        entries.append(
+            next((k for k, close in enumerate(panel.closes) if close is not None), None)
+        )
 
     curve: list[float] = []
     for k in range(len(dates)):
@@ -787,7 +809,11 @@ def equal_weight_benchmark(panels: list[Panel], dates: list[int], costs: Costs) 
             latest = panel.closes[k]
             if latest is None:  # gone since: mark at the last print it had
                 latest = next(
-                    (panel.closes[j] for j in range(k - 1, entry - 1, -1) if panel.closes[j] is not None),
+                    (
+                        panel.closes[j]
+                        for j in range(k - 1, entry - 1, -1)
+                        if panel.closes[j] is not None
+                    ),
                     panel.closes[entry],
                 )
             total += weight * (latest / panel.closes[entry]) * (1.0 - costs.rate) ** 2
@@ -814,7 +840,7 @@ def cash_markers(result: PortfolioResult) -> list[report.Marker]:
     — green for more capital at work, red for less.
     """
     markers: list[report.Marker] = []
-    previous = 0.0          # the account starts in cash, so the first entry is a move
+    previous = 0.0  # the account starts in cash, so the first entry is a move
     for rebalance in result.rebalances:
         exposure = gross_exposure((rebalance.longs, rebalance.shorts), result.mode)
         if exposure != previous:
@@ -861,8 +887,20 @@ def write_chart(path: Path, result: PortfolioResult, dates: list[int]) -> None:
 
 #: Colours cycled through the drawn assets, in the order they are picked.
 ASSET_COLORS = (
-    "#1a73e8", "#188038", "#d93025", "#f9ab00", "#9334e6", "#0b8043", "#c5221f",
-    "#3f51b5", "#00838f", "#6d4c41", "#ad1457", "#2e7d32", "#ef6c00", "#5e35b1",
+    "#1a73e8",
+    "#188038",
+    "#d93025",
+    "#f9ab00",
+    "#9334e6",
+    "#0b8043",
+    "#c5221f",
+    "#3f51b5",
+    "#00838f",
+    "#6d4c41",
+    "#ad1457",
+    "#2e7d32",
+    "#ef6c00",
+    "#5e35b1",
 )
 #: What an asset that was never bought looks like.
 NEVER_COLOR = "#9aa0a6"
@@ -880,7 +918,9 @@ def trade_log(result: PortfolioResult, panels: list[Panel], dates: list[int]):
     shorts = [set(balance.shorts) for balance in result.rebalances]
     events: list[tuple[str, str, int, float]] = []
     for k in range(len(longs)):
-        before_long, before_short = (longs[k - 1], shorts[k - 1]) if k else (set(), set())
+        before_long, before_short = (
+            (longs[k - 1], shorts[k - 1]) if k else (set(), set())
+        )
         for side, entry, exit_ in (
             (longs[k], "buy", "sell"),
             (shorts[k], "short", "cover"),
@@ -897,7 +937,9 @@ def trade_log(result: PortfolioResult, panels: list[Panel], dates: list[int]):
     return events
 
 
-def pair_stats(result: PortfolioResult, panels: list[Panel], dates: list[int]) -> list[dict]:
+def pair_stats(
+    result: PortfolioResult, panels: list[Panel], dates: list[int]
+) -> list[dict]:
     """Per pair: how often the book held it, and how often it went in and out.
 
     Every symbol of the universe gets a row, including the ones the rule never bought
@@ -921,7 +963,9 @@ def pair_stats(result: PortfolioResult, panels: list[Panel], dates: list[int]) -
         row = by_symbol.get(symbol)
         if row is None:
             continue
-        row[{"buy": "buys", "sell": "sells", "short": "shorts", "cover": "covers"}[kind]] += 1
+        row[
+            {"buy": "buys", "sell": "sells", "short": "shorts", "cover": "covers"}[kind]
+        ] += 1
     for k, balance in enumerate(result.rebalances):
         for symbol in set(balance.longs) | set(balance.shorts):
             row = by_symbol.get(symbol)
@@ -934,7 +978,9 @@ def pair_stats(result: PortfolioResult, panels: list[Panel], dates: list[int]) -
     return sorted(by_symbol.values(), key=lambda row: (-row["held"], row["symbol"]))
 
 
-def write_pairs(path: Path, result: PortfolioResult, panels: list[Panel], dates: list[int]) -> None:
+def write_pairs(
+    path: Path, result: PortfolioResult, panels: list[Panel], dates: list[int]
+) -> None:
     """The full per-pair census as CSV: one row per symbol the run watched."""
     import csv as csv_module
 
@@ -943,8 +989,17 @@ def write_pairs(path: Path, result: PortfolioResult, panels: list[Panel], dates:
     with path.open("w", newline="") as fh:
         writer = csv_module.writer(fh)
         writer.writerow(
-            ["symbol", "rebalances_held", "buys", "sells", "shorts", "covers",
-             "first_held_utc", "last_held_utc", "ever_traded"]
+            [
+                "symbol",
+                "rebalances_held",
+                "buys",
+                "sells",
+                "shorts",
+                "covers",
+                "first_held_utc",
+                "last_held_utc",
+                "ever_traded",
+            ]
         )
         for row in rows:
             writer.writerow(
@@ -1062,7 +1117,7 @@ def write_trades_chart(
         periods = counts.get(panel.symbol, 0)
         lines.append(
             f'<g class="asset"><title>{_xml(panel.symbol)} — held for {periods} of '
-            f'{len(holds)} rebalances</title>{body}</g>'
+            f"{len(holds)} rebalances</title>{body}</g>"
         )
         last = next((i for i in range(n - 1, -1, -1) if panel.closes[i]), None)
         if last is not None:
@@ -1119,10 +1174,10 @@ def write_trades_chart(
         f"""viewBox="0 0 {width} {height}">
 <rect width="{width}" height="{height}" fill="#ffffff"/>
 <text x="{pad_l}" y="24" font-size="14" font-family="sans-serif" fill="#111">{_xml(title)}</text>
-{''.join(grid)}{axis}
-{''.join(lines)}
-{''.join(markers)}
-{''.join(text_labels)}
+{"".join(grid)}{axis}
+{"".join(lines)}
+{"".join(markers)}
+{"".join(text_labels)}
 <text x="{pad_l}" y="{height - 8}" font-size="11" font-family="sans-serif" fill="#666">{_xml(footer)}</text>
 </svg>
 """
@@ -1193,10 +1248,16 @@ def render(result: PortfolioResult, dates: list[int]) -> str:
     if result.rebalances:
         last = result.rebalances[-1]
         add("")
-        add(f"last rebalance {data.iso(last.time)} UTC — {last.candidates} symbols ranked")
-        add(f"  long : {', '.join(last.longs[:12])}{'…' if len(last.longs) > 12 else ''}")
+        add(
+            f"last rebalance {data.iso(last.time)} UTC — {last.candidates} symbols ranked"
+        )
+        add(
+            f"  long : {', '.join(last.longs[:12])}{'…' if len(last.longs) > 12 else ''}"
+        )
         if last.shorts:
-            add(f"  short: {', '.join(last.shorts[:12])}{'…' if len(last.shorts) > 12 else ''}")
+            add(
+                f"  short: {', '.join(last.shorts[:12])}{'…' if len(last.shorts) > 12 else ''}"
+            )
     if result.rebalances:
         rows = []
         for balance in result.rebalances:
@@ -1209,7 +1270,9 @@ def render(result: PortfolioResult, dates: list[int]) -> str:
             f"{never} {'was' if never == 1 else 'were'} never bought"
         )
         stats = result.pair_stats()
-        add(f"  {'name':<14}{'rebalances':>11}{'in':>5}{'out':>5}  {'first held':<12}{'last held':<12}")
+        add(
+            f"  {'name':<14}{'rebalances':>11}{'in':>5}{'out':>5}  {'first held':<12}{'last held':<12}"
+        )
         for row in stats[:8]:
             add(
                 f"  {row['symbol']:<14}{row['held']:>11}{row['buys'] + row['shorts']:>5}"
@@ -1224,10 +1287,20 @@ def render(result: PortfolioResult, dates: list[int]) -> str:
     def row(label: str, left: str, right: str) -> None:
         add(f"{label:<26}{left:>18}{right:>18}")
 
-    row("total return", pct(result.performance.total_return), pct(result.benchmark.total_return))
+    row(
+        "total return",
+        pct(result.performance.total_return),
+        pct(result.benchmark.total_return),
+    )
     row("CAGR", pct(result.performance.cagr), pct(result.benchmark.cagr))
-    row("annualised vol", pct(result.performance.ann_vol), pct(result.benchmark.ann_vol))
-    row("Sharpe (rf=0)", f"{result.performance.sharpe:.2f}", f"{result.benchmark.sharpe:.2f}")
+    row(
+        "annualised vol", pct(result.performance.ann_vol), pct(result.benchmark.ann_vol)
+    )
+    row(
+        "Sharpe (rf=0)",
+        f"{result.performance.sharpe:.2f}",
+        f"{result.benchmark.sharpe:.2f}",
+    )
     row("max drawdown", pct(result.performance.max_dd), pct(result.benchmark.max_dd))
     row("years", f"{result.performance.years:.2f}", f"{result.benchmark.years:.2f}")
     add("")
@@ -1250,9 +1323,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--timeframe", default="1d")
-    parser.add_argument("--lookback", type=int, default=30, help="ranking window, in bars")
-    parser.add_argument("--rebalance", type=int, default=30, help="bars between rebalances")
-    parser.add_argument("--top", type=float, default=0.2, help="fraction (<1) or count (>=1) per side (--select rank)")
+    parser.add_argument(
+        "--lookback", type=int, default=30, help="ranking window, in bars"
+    )
+    parser.add_argument(
+        "--rebalance", type=int, default=30, help="bars between rebalances"
+    )
+    parser.add_argument(
+        "--top",
+        type=float,
+        default=0.2,
+        help="fraction (<1) or count (>=1) per side (--select rank)",
+    )
     parser.add_argument(
         "--select",
         default="rank",
@@ -1264,7 +1346,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="0",
         help="with --select sign: the trailing return a symbol must beat, e.g. 0 or 5%% (default: %(default)s)",
     )
-    parser.add_argument("--mode", default="long-only", choices=("long-only", "long-short"))
+    parser.add_argument(
+        "--mode", default="long-only", choices=("long-only", "long-short")
+    )
     parser.add_argument(
         "--exclude-equities",
         action="store_true",
@@ -1279,7 +1363,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         metavar="DATE",
         help="start the reported window here (ISO date); with --to this evaluates one "
-             "stretch, which is what a walk-forward needs",
+        "stretch, which is what a walk-forward needs",
     )
     parser.add_argument(
         "--to",
@@ -1295,15 +1379,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         metavar="N",
         help="report only the last N rebalances (warm-up still uses the history before them)",
     )
-    parser.add_argument("--min-bars", type=int, default=0, help="skip symbols shorter than this")
-    parser.add_argument("--limit", type=int, default=None, help="use only the first N symbols")
+    parser.add_argument(
+        "--min-bars", type=int, default=0, help="skip symbols shorter than this"
+    )
+    parser.add_argument(
+        "--limit", type=int, default=None, help="use only the first N symbols"
+    )
     parser.add_argument(
         "--quote",
         default="USDT",
         help="keep only pairs quoted in these currencies, comma-separated "
         "(default: %(default)s); use 'any' for every pair on disk",
     )
-    parser.add_argument("--calendar", default=DEFAULT_CALENDAR, help="symbol whose bars define the schedule")
+    parser.add_argument(
+        "--calendar",
+        default=DEFAULT_CALENDAR,
+        help="symbol whose bars define the schedule",
+    )
     parser.add_argument("--data-dir", type=Path, default=data.DEFAULT_DATA_DIR)
     parser.add_argument("--json", type=Path, default=None)
     parser.add_argument(
@@ -1318,29 +1410,65 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="write a second SVG: every asset's price with the prices it was bought and sold at",
     )
-    parser.add_argument("--vol-target", default="0%",
-                        help="hold this annualised volatility for the whole book, "
-                             "e.g. 25%% (0%% = off)")
-    parser.add_argument("--vol-window", type=int, default=12,
-                        help="rebalance periods used to measure the book's volatility "
-                             "(default: %(default)s)")
-    parser.add_argument("--vol-cap", type=float, default=1.0,
-                        help="never hold more than this share of the capital (default: %(default)s)")
-    parser.add_argument("--vol-floor", type=float, default=0.0,
-                        help="never hold less than this share (default: %(default)s)")
-    parser.add_argument("--trend-gate", type=int, default=0,
-                        help="require the close above its own mean of N bars (0 = off)")
-    parser.add_argument("--trend-threshold", default="0%",
-                        help="how far above that mean, e.g. 5%% (default: %(default)s)")
-    parser.add_argument("--max-below-peak", default="0%",
-                        help="drop names more than this far below their own running peak "
-                             "(e.g. 90%%, 0%% = off)")
-    parser.add_argument("--min-turnover", type=float, default=0.0,
-                        help="median quote turnover per bar a name must trade (0 = off)")
-    parser.add_argument("--min-volatility", default="0%",
-                        help="annualised volatility floor, e.g. 10%% (0%% = off)")
-    parser.add_argument("--gate-window", type=int, default=None,
-                        help="bars used for the turnover/volatility gates (default: --lookback)")
+    parser.add_argument(
+        "--vol-target",
+        default="0%",
+        help="hold this annualised volatility for the whole book, "
+        "e.g. 25%% (0%% = off)",
+    )
+    parser.add_argument(
+        "--vol-window",
+        type=int,
+        default=12,
+        help="rebalance periods used to measure the book's volatility "
+        "(default: %(default)s)",
+    )
+    parser.add_argument(
+        "--vol-cap",
+        type=float,
+        default=1.0,
+        help="never hold more than this share of the capital (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--vol-floor",
+        type=float,
+        default=0.0,
+        help="never hold less than this share (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--trend-gate",
+        type=int,
+        default=0,
+        help="require the close above its own mean of N bars (0 = off)",
+    )
+    parser.add_argument(
+        "--trend-threshold",
+        default="0%",
+        help="how far above that mean, e.g. 5%% (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--max-below-peak",
+        default="0%",
+        help="drop names more than this far below their own running peak "
+        "(e.g. 90%%, 0%% = off)",
+    )
+    parser.add_argument(
+        "--min-turnover",
+        type=float,
+        default=0.0,
+        help="median quote turnover per bar a name must trade (0 = off)",
+    )
+    parser.add_argument(
+        "--min-volatility",
+        default="0%",
+        help="annualised volatility floor, e.g. 10%% (0%% = off)",
+    )
+    parser.add_argument(
+        "--gate-window",
+        type=int,
+        default=None,
+        help="bars used for the turnover/volatility gates (default: --lookback)",
+    )
     parser.add_argument(
         "--pairs-csv",
         type=Path,
@@ -1402,7 +1530,9 @@ def universes(
     crypto assets, so the US dollar move cancels out and the book silently takes a
     second exposure it did not ask for. `None` (CLI: `--quote any`) keeps everything.
     """
-    pairs = sorted(symbol for symbol, tf in data.available_series(data_dir) if tf == timeframe)
+    pairs = sorted(
+        symbol for symbol, tf in data.available_series(data_dir) if tf == timeframe
+    )
     if quotes is not None:
         wanted = set(quotes)
         pairs = [symbol for symbol in pairs if quote_of(symbol) in wanted]
@@ -1418,12 +1548,19 @@ def main(argv: list[str] | None = None) -> int:
     every = universes(args.data_dir, args.timeframe, quotes=None)
     symbols = universes(args.data_dir, args.timeframe, limit=args.limit, quotes=quotes)
     symbols, equities = data.split_equities(symbols, args.exclude_equities)
-    skipped = len(every) - len(symbols if args.limit is None else
-                              universes(args.data_dir, args.timeframe, quotes=quotes))
+    skipped = len(every) - len(
+        symbols
+        if args.limit is None
+        else universes(args.data_dir, args.timeframe, quotes=quotes)
+    )
     if len(symbols) < 2:
-        raise SystemExit(f"not enough series for {args.timeframe} under {args.data_dir}")
+        raise SystemExit(
+            f"not enough series for {args.timeframe} under {args.data_dir}"
+        )
 
-    calendar_times = load_calendar(args.data_dir, args.timeframe, calendar=args.calendar)
+    calendar_times = load_calendar(
+        args.data_dir, args.timeframe, calendar=args.calendar
+    )
     dates = rebalance_dates(calendar_times, args.rebalance)
     if len(dates) < 3:
         raise SystemExit(
@@ -1438,7 +1575,8 @@ def main(argv: list[str] | None = None) -> int:
         )
     if since or until:
         window = [
-            moment for moment in dates
+            moment
+            for moment in dates
             if (since is None or moment >= since) and (until is None or moment <= until)
         ]
         if len(window) < 3:
@@ -1455,8 +1593,10 @@ def main(argv: list[str] | None = None) -> int:
                 f"--last {args.last} but the archive only holds {len(dates)} rebalances "
                 f"at {args.rebalance} bars"
             )
-        dates = dates[-args.last:]
-    step = int(statistics.median([b - a for a, b in zip(calendar_times, calendar_times[1:])]))
+        dates = dates[-args.last :]
+    step = int(
+        statistics.median([b - a for a, b in zip(calendar_times, calendar_times[1:])])
+    )
     lookback_seconds = args.lookback * step
     # A symbol that has not printed for five bars is treated as delisted.
     max_age = 5 * step
@@ -1464,7 +1604,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         gates = GateSpec(
             trend_bars=args.trend_gate,
-            trend_threshold=threshold_of(args.trend_threshold) if args.trend_gate else 0.0,
+            trend_threshold=threshold_of(args.trend_threshold)
+            if args.trend_gate
+            else 0.0,
             max_below_peak=abs(threshold_of(args.max_below_peak)),
             min_turnover=args.min_turnover,
             min_volatility=abs(threshold_of(args.min_volatility)),
@@ -1485,26 +1627,39 @@ def main(argv: list[str] | None = None) -> int:
     panels: list[Panel] = []
     for symbol in symbols:
         try:
-            times, closes, turnover = read_closes(
-                args.data_dir, symbol, args.timeframe, with_volume=gates.active
-            ) if gates.active else (*read_closes(args.data_dir, symbol, args.timeframe), None)
+            times, closes, turnover = (
+                read_closes(
+                    args.data_dir, symbol, args.timeframe, with_volume=gates.active
+                )
+                if gates.active
+                else (*read_closes(args.data_dir, symbol, args.timeframe), None)
+            )
         except FileNotFoundError:
             continue
         if len(times) < args.min_bars:
             continue
         panel = build_panel(
-            times, closes, symbol, dates, lookback_seconds, max_age,
+            times,
+            closes,
+            symbol,
+            dates,
+            lookback_seconds,
+            max_age,
             gate_seconds=gate_seconds if gates.active else None,
             trend_bars=gates.trend_bars or None,
             turnover=turnover if gates.active else None,
         )
         if any(value is not None for value in panel.momentum):
             panels.append(panel)
-    print(f"loaded {len(panels)} symbols on {len(dates)} rebalance dates ({args.timeframe})")
+    print(
+        f"loaded {len(panels)} symbols on {len(dates)} rebalance dates ({args.timeframe})"
+    )
 
     threshold = threshold_of(args.threshold)
     if args.select == "sign" and args.top != 0.2:
-        print("note: --top is ignored with --select sign; the threshold decides who is held")
+        print(
+            "note: --top is ignored with --select sign; the threshold decides who is held"
+        )
     label = (
         f"{args.timeframe} sign filter"
         if args.select == "sign"
@@ -1538,7 +1693,9 @@ def main(argv: list[str] | None = None) -> int:
         write_chart(args.chart, result, dates)
         print(f"\nwrote {args.chart}")
     if args.chart_trades:
-        write_trades_chart(args.chart_trades, result, panels, dates, limit=args.chart_symbols)
+        write_trades_chart(
+            args.chart_trades, result, panels, dates, limit=args.chart_symbols
+        )
         print(f"wrote {args.chart_trades}")
     if args.json:
         args.json.parent.mkdir(parents=True, exist_ok=True)

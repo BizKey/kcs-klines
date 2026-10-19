@@ -42,12 +42,40 @@ TOKENISED_EQUITY_SYMBOLS = frozenset(
 #: fails the test in `tests/test_data.py` until it is added to one of the two sets.
 CRYPTO_X_SUFFIX_ALLOWLIST = frozenset(
     {
-        "ADX-USDT", "ALEX-USDT", "ARX-USDT", "AVAX-USDT", "BDX-USDT", "CFX-USDT",
-        "CVX-USDT", "DYDX-USDT", "FLUX-USDT", "FRAX-USDT", "GHX-USDT", "GMRX-USDT",
-        "GMX-USDT", "HTX-USDT", "ICX-USDT", "IMX-USDT", "INX-USDT", "IOTX-USDT",
-        "LYX-USDT", "NATIX-USDT", "NAVX-USDT", "NEX-USDT", "PIX-USDT", "POLYX-USDT",
-        "PUNDIX-USDT", "SNX-USDT", "SPX-USDT", "STRAX-USDT", "STX-USDT", "TMX-USDT",
-        "TRX-USDT", "WEMIX-USDT", "WMTX-USDT", "ZRX-USDT",
+        "ADX-USDT",
+        "ALEX-USDT",
+        "ARX-USDT",
+        "AVAX-USDT",
+        "BDX-USDT",
+        "CFX-USDT",
+        "CVX-USDT",
+        "DYDX-USDT",
+        "FLUX-USDT",
+        "FRAX-USDT",
+        "GHX-USDT",
+        "GMRX-USDT",
+        "GMX-USDT",
+        "HTX-USDT",
+        "ICX-USDT",
+        "IMX-USDT",
+        "INX-USDT",
+        "IOTX-USDT",
+        "LYX-USDT",
+        "NATIX-USDT",
+        "NAVX-USDT",
+        "NEX-USDT",
+        "PIX-USDT",
+        "POLYX-USDT",
+        "PUNDIX-USDT",
+        "SNX-USDT",
+        "SPX-USDT",
+        "STRAX-USDT",
+        "STX-USDT",
+        "TMX-USDT",
+        "TRX-USDT",
+        "WEMIX-USDT",
+        "WMTX-USDT",
+        "ZRX-USDT",
     }
 )
 
@@ -57,7 +85,9 @@ def is_tokenised_equity(symbol: str) -> bool:
     return symbol.upper() in TOKENISED_EQUITY_SYMBOLS
 
 
-def split_equities(symbols: Iterable[str], exclude: bool) -> tuple[list[str], list[str]]:
+def split_equities(
+    symbols: Iterable[str], exclude: bool
+) -> tuple[list[str], list[str]]:
     """`(kept, equities_found)` for a universe, dropping the stock tokens when asked.
 
     The second element is every stock token the universe held, whether or not it was
@@ -204,7 +234,9 @@ def parse_duration(text: str) -> int:
     key = "mon" if suffix == "M" else suffix.lower()
     if not digits or key not in DURATIONS:
         known = ", ".join(sorted({"1s", "1m", "1h", "1d", "1w", "1mon", "1y"}))
-        raise ValueError(f"cannot read {text!r} as a duration; try one of {known} (e.g. 30d)")
+        raise ValueError(
+            f"cannot read {text!r} as a duration; try one of {known} (e.g. 30d)"
+        )
     return int(float(digits) * DURATIONS[key])
 
 
@@ -241,7 +273,9 @@ def parse_date(text: str | None, flag: str = "--date") -> int | None:
             .timestamp()
         )
     except ValueError as exc:
-        raise ValueError(f"{flag} wants an ISO date like 2024-10-01, got {text!r}") from exc
+        raise ValueError(
+            f"{flag} wants an ISO date like 2024-10-01, got {text!r}"
+        ) from exc
 
 
 def bars_per_year(timeframe: str) -> float:
@@ -291,7 +325,9 @@ def load_series(data_dir: Path | str, symbol: str, timeframe: str) -> list[Bar]:
 
     by_time: dict[int, Bar] = {}
     for path in files:
-        table = pq.read_table(path, columns=["time", "open", "high", "low", "close", "volume"])
+        table = pq.read_table(
+            path, columns=["time", "open", "high", "low", "close", "volume"]
+        )
         cols = table.to_pydict()
         for i, ts in enumerate(cols["time"]):
             by_time[ts] = Bar(
@@ -359,7 +395,9 @@ def data_quality(bars: list[Bar], timeframe: str) -> QualityReport:
     bad_ohlc = sum(
         1
         for b in bars
-        if b.high < max(b.open, b.close) or b.low > min(b.open, b.close) or b.high < b.low
+        if b.high < max(b.open, b.close)
+        or b.low > min(b.open, b.close)
+        or b.high < b.low
     )
     nonpositive = sum(1 for b in bars if b.open <= 0 or b.close <= 0)
 

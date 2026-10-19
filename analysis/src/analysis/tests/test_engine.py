@@ -17,9 +17,7 @@ from ..engine import (
     DrawdownScale,
     bookkeeping_warning,
     buy_and_hold,
-    buy_and_hold_bars,
     close_fill_final_equity,
-    fees_in_window,
     restrict,
     run_backtest,
 )
@@ -61,7 +59,9 @@ def test_one_round_trip_pays_two_sides_of_commission():
     # Open at the second bar, close at the fourth: price flat, so only fees move.
     assert result.final_equity == pytest.approx((1 - 0.001) ** 2, rel=1e-12)
     assert len(result.closed_trades) == 1
-    assert result.closed_trades[0].net_return == pytest.approx((1 - 0.001) ** 2 - 1, rel=1e-12)
+    assert result.closed_trades[0].net_return == pytest.approx(
+        (1 - 0.001) ** 2 - 1, rel=1e-12
+    )
 
 
 def test_a_trade_return_includes_both_commission_sides():
@@ -76,10 +76,15 @@ def test_slippage_adds_to_the_per_side_cost():
     bars = make_bars([100, 100, 110, 110], opens=[100, 100, 100, 110])
     without = run_backtest(bars, [1.0, 1.0, 0.0, 0.0], "1h", Costs(fee_per_side=0.0))
     with_slippage = run_backtest(
-        bars, [1.0, 1.0, 0.0, 0.0], "1h", Costs(fee_per_side=0.0, slippage_per_side=0.002)
+        bars,
+        [1.0, 1.0, 0.0, 0.0],
+        "1h",
+        Costs(fee_per_side=0.0, slippage_per_side=0.002),
     )
     assert with_slippage.final_equity < without.final_equity
-    assert with_slippage.final_equity == pytest.approx(without.final_equity * 0.998**2, rel=1e-12)
+    assert with_slippage.final_equity == pytest.approx(
+        without.final_equity * 0.998**2, rel=1e-12
+    )
 
 
 def test_a_short_position_profits_when_the_price_falls():
@@ -93,7 +98,9 @@ def test_a_short_position_profits_when_the_price_falls():
 
 def test_flipping_from_long_to_short_pays_two_sides():
     bars = make_bars([100, 100, 100, 100], opens=[100, 100, 100, 100])
-    result = run_backtest(bars, [1.0, -1.0, -1.0, -1.0], "1h", Costs(fee_per_side=0.001))
+    result = run_backtest(
+        bars, [1.0, -1.0, -1.0, -1.0], "1h", Costs(fee_per_side=0.001)
+    )
     # One side to go long, then two sides for the flip.
     assert result.final_equity == pytest.approx((1 - 0.001) ** 3, rel=1e-12)
     assert [t.side for t in result.trades] == ["long", "short"]
@@ -111,7 +118,9 @@ def test_fractional_exposure_is_allowed():
     bars = make_bars([100, 100, 200, 200], opens=[100, 100, 100, 200])
     half = run_backtest(bars, [0.5] * 4, "1h", Costs(0))
     full = run_backtest(bars, [1.0] * 4, "1h", Costs(0))
-    assert full.final_equity - 1 == pytest.approx(2 * (half.final_equity - 1), rel=1e-12)
+    assert full.final_equity - 1 == pytest.approx(
+        2 * (half.final_equity - 1), rel=1e-12
+    )
 
 
 def test_targets_and_bars_must_line_up():
@@ -205,7 +214,9 @@ def test_bookkeeping_warning_fires_when_the_trade_book_drifts():
 
 def test_strict_mode_passes_on_a_healthy_run():
     bars = make_bars(ramp(30))
-    result = run_backtest(bars, SmaTrend(window=3).targets(bars), "1h", Costs(0.001), strict=True)
+    result = run_backtest(
+        bars, SmaTrend(window=3).targets(bars), "1h", Costs(0.001), strict=True
+    )
     assert result.warnings == []
 
 
@@ -222,8 +233,12 @@ def test_buy_and_hold_pays_one_entry_and_one_exit():
     # open[0] is deliberately below open[1] — the benchmark must ignore it.
     bars = make_bars([100, 120, 150], opens=[80, 100, 120])
     benchmark = buy_and_hold(bars, Costs(fee_per_side=0.001), "1h")
-    assert benchmark.gross_equity == pytest.approx(1.5)  # bought at open[1]=100, sold at 150
-    assert benchmark.performance.final_equity == pytest.approx(1.5 * 0.999**2, rel=1e-12)
+    assert benchmark.gross_equity == pytest.approx(
+        1.5
+    )  # bought at open[1]=100, sold at 150
+    assert benchmark.performance.final_equity == pytest.approx(
+        1.5 * 0.999**2, rel=1e-12
+    )
     assert benchmark.label == "buy & hold"
 
 
@@ -236,7 +251,9 @@ def test_buy_and_hold_starts_where_a_strategy_could_trade():
     """
     bars = make_bars([5, 5, 5, 5], opens=[1, 5, 5, 5])
     benchmark = buy_and_hold(bars, Costs(0), "1h")
-    assert benchmark.equity[0] == 1.0  # cash on bar 0, same starting point as a strategy
+    assert (
+        benchmark.equity[0] == 1.0
+    )  # cash on bar 0, same starting point as a strategy
     assert benchmark.gross_equity == pytest.approx(1.0)  # 5 -> 5, not 1 -> 5
     assert benchmark.performance.total_return == pytest.approx(0.0)
 
@@ -261,7 +278,9 @@ def test_an_open_position_is_marked_to_market_at_the_last_close():
 
 def test_result_summary_is_json_friendly():
     bars = make_bars(ramp(20))
-    result = run_backtest(bars, SmaTrend(window=3).targets(bars), "1h", Costs(0.001), label="sma3")
+    result = run_backtest(
+        bars, SmaTrend(window=3).targets(bars), "1h", Costs(0.001), label="sma3"
+    )
     data = result.as_dict()
     assert data["label"] == "sma3"
     assert data["strategy"]["final_equity"] == pytest.approx(result.final_equity)
@@ -276,7 +295,9 @@ def test_result_summary_is_json_friendly():
 def wavy_result(count: int = 400, window: int = 5):
     bars = make_bars([100.0 + 15.0 * math.sin(i / 6.0) + 0.2 * i for i in range(count)])
     strategy = SmaTrend(window=window)
-    return bars, run_backtest(bars, strategy.targets(bars), "1h", Costs(fee_per_side=0.001))
+    return bars, run_backtest(
+        bars, strategy.targets(bars), "1h", Costs(fee_per_side=0.001)
+    )
 
 
 def test_a_window_is_the_tail_of_the_full_run_rebased():
@@ -286,7 +307,9 @@ def test_a_window_is_the_tail_of_the_full_run_rebased():
     windowed = restrict(full, bars, "1h", first=first)
     assert windowed.equity[0] == 1.0
     for k in range(1, len(windowed.equity) - 1):
-        assert windowed.equity[k] == pytest.approx(full.equity[start + k] / full.equity[start])
+        assert windowed.equity[k] == pytest.approx(
+            full.equity[start + k] / full.equity[start]
+        )
     assert windowed.performance.final_equity == pytest.approx(
         full.performance.final_equity / full.equity[start]
     )
@@ -296,7 +319,9 @@ def test_a_window_is_the_tail_of_the_full_run_rebased():
 def test_a_window_keeps_the_trade_book_identity():
     """A position open when the window began is folded in, so the books still meet."""
     bars, full = wavy_result()
-    full_started_long = [i for i in range(1, len(full.positions)) if full.positions[i - 1] == 1.0]
+    full_started_long = [
+        i for i in range(1, len(full.positions)) if full.positions[i - 1] == 1.0
+    ]
     assert full_started_long  # the fixture is in the market at some point
     for start in full_started_long[:5]:
         windowed = restrict(full, bars, "1h", first=bars[start].time)
@@ -305,7 +330,9 @@ def test_a_window_keeps_the_trade_book_identity():
 
 def test_a_position_open_at_the_window_start_says_so():
     bars, full = wavy_result()
-    start = next(i for i in range(1, len(full.positions)) if full.positions[i - 1] == 1.0)
+    start = next(
+        i for i in range(1, len(full.positions)) if full.positions[i - 1] == 1.0
+    )
     windowed = restrict(full, bars, "1h", first=bars[start].time)
     assert any("already open when the window began" in w for w in windowed.warnings)
     carried = windowed.trades[0]
@@ -319,7 +346,9 @@ def test_a_window_benchmark_enters_at_the_windows_second_open():
     start = 300
     windowed = restrict(full, bars, "1h", first=bars[start].time)
     assert windowed.benchmark.equity[0] == 1.0
-    assert windowed.benchmark.equity[1] == pytest.approx(bars[start + 1].close / bars[start + 1].open)
+    assert windowed.benchmark.equity[1] == pytest.approx(
+        bars[start + 1].close / bars[start + 1].open
+    )
     assert windowed.benchmark.performance.final_equity == pytest.approx(
         bars[-1].close / bars[start + 1].open * 0.999**2, rel=1e-9
     )
@@ -330,7 +359,9 @@ def test_a_window_reports_only_the_trades_it_contains():
     start = 300
     windowed = restrict(full, bars, "1h", first=bars[start].time)
     inside = [t for t in full.trades if t.entry_index >= start]
-    assert len(windowed.trades) == len(inside) or len(windowed.trades) == len(inside) + 1
+    assert (
+        len(windowed.trades) == len(inside) or len(windowed.trades) == len(inside) + 1
+    )
     assert all(t.entry_time >= bars[start].time for t in windowed.trades)
 
 
@@ -371,13 +402,13 @@ def test_the_overlay_is_off_unless_asked_for():
 
 def test_the_factor_only_bites_once_the_account_is_below_its_high():
     scale = DrawdownScale(start=0.10, full=0.40, floor=0.25)
-    assert scale.factor(100.0, 100.0) == 1.0            # at the high: full size
-    assert scale.factor(95.0, 100.0) == 1.0             # −5%: still above the start
-    assert scale.factor(90.0, 100.0) == 1.0             # exactly at the start
+    assert scale.factor(100.0, 100.0) == 1.0  # at the high: full size
+    assert scale.factor(95.0, 100.0) == 1.0  # −5%: still above the start
+    assert scale.factor(90.0, 100.0) == 1.0  # exactly at the start
     assert scale.factor(75.0, 100.0) == pytest.approx(1.0 - 0.75 * (0.25 - 0.10) / 0.30)
-    assert scale.factor(60.0, 100.0) == 0.25            # at the full level: the floor
-    assert scale.factor(20.0, 100.0) == 0.25            # deeper: still the floor
-    assert scale.factor(100.0, 0.0) == 1.0              # a dead peak cannot divide
+    assert scale.factor(60.0, 100.0) == 0.25  # at the full level: the floor
+    assert scale.factor(20.0, 100.0) == 0.25  # deeper: still the floor
+    assert scale.factor(100.0, 0.0) == 1.0  # a dead peak cannot divide
 
 
 def test_a_drawdown_cuts_the_exposure_and_a_recovery_restores_it():
@@ -387,10 +418,12 @@ def test_a_drawdown_cuts_the_exposure_and_a_recovery_restores_it():
     closes += [closes[-1] * (1.03**i) for i in range(1, 40)]
     bars = make_bars(closes)
     targets = [1.0] * len(bars)
-    result = run_backtest(bars, targets, "1d", Costs(), drawdown_scale=DrawdownScale(0.10, 0.40, 0.25))
+    result = run_backtest(
+        bars, targets, "1d", Costs(), drawdown_scale=DrawdownScale(0.10, 0.40, 0.25)
+    )
     trough = min(result.positions)
-    assert trough < 0.5                                  # deep in the fall it is small
-    assert result.positions[-1] > trough                 # and it comes back on the way up
+    assert trough < 0.5  # deep in the fall it is small
+    assert result.positions[-1] > trough  # and it comes back on the way up
     assert result.exposure_scale[0] == 1.0
     assert min(result.exposure_scale) >= 0.25
     # the account's drawdown is smaller than the same rule without the overlay
@@ -400,10 +433,16 @@ def test_a_drawdown_cuts_the_exposure_and_a_recovery_restores_it():
 
 def test_a_floor_of_zero_parks_the_account_for_good():
     """Documented trap: flat means the drawdown never shrinks, so it never returns."""
-    closes = [100.0 * (1.01**i) for i in range(30)] + [100.0 * (0.97**i) for i in range(1, 40)]
+    closes = [100.0 * (1.01**i) for i in range(30)] + [
+        100.0 * (0.97**i) for i in range(1, 40)
+    ]
     bars = make_bars(closes)
     result = run_backtest(
-        bars, [1.0] * len(bars), "1d", Costs(), drawdown_scale=DrawdownScale(0.05, 0.20, 0.0)
+        bars,
+        [1.0] * len(bars),
+        "1d",
+        Costs(),
+        drawdown_scale=DrawdownScale(0.05, 0.20, 0.0),
     )
     assert result.positions[-1] == 0.0
     assert result.exposure_scale[-1] == 0.0
@@ -417,7 +456,9 @@ def test_the_overlay_never_looks_ahead():
     scale = DrawdownScale(0.05, 0.30, 0.25)
     original = run_backtest(bars, targets, "1d", Costs(), drawdown_scale=scale)
     cut = 80
-    tampered = make_bars([c * (10.0 if i == cut else 1.0) for i, c in enumerate(closes)])
+    tampered = make_bars(
+        [c * (10.0 if i == cut else 1.0) for i, c in enumerate(closes)]
+    )
     rewritten = run_backtest(tampered, targets, "1d", Costs(), drawdown_scale=scale)
     assert original.exposure_scale[:cut] == rewritten.exposure_scale[:cut]
     assert original.positions[:cut] == rewritten.positions[:cut]
@@ -430,7 +471,11 @@ def test_the_book_still_balances_with_the_overlay_on():
     back = [down[-1] * (1.03**i) for i in range(1, 40)]
     bars = make_bars(up + down + back)
     result = run_backtest(
-        bars, [1.0] * len(bars), "1d", Costs(), drawdown_scale=DrawdownScale(0.10, 0.40, 0.25)
+        bars,
+        [1.0] * len(bars),
+        "1d",
+        Costs(),
+        drawdown_scale=DrawdownScale(0.10, 0.40, 0.25),
     )
     compounded = 1.0
     for trade in result.trades:
@@ -455,21 +500,31 @@ def _bars_with_range(closes, lows, highs):
     from ..data import Bar
 
     return [
-        Bar(time=1_507_161_600 + i * 3_600, open=close, high=high, low=low, close=close, volume=1.0)
+        Bar(
+            time=1_507_161_600 + i * 3_600,
+            open=close,
+            high=high,
+            low=low,
+            close=close,
+            volume=1.0,
+        )
         for i, (close, low, high) in enumerate(zip(closes, lows, highs))
     ]
 
 
 def test_an_intrabar_exit_is_filled_at_the_level_not_the_next_open():
     """The stop is touched and the bar closes back above it: the exit still happens."""
-    bars = _bars_with_range([100.0, 100.0, 100.0, 120.0], [100.0, 100.0, 90.0, 120.0],
-                            [100.0, 100.0, 105.0, 120.0])
+    bars = _bars_with_range(
+        [100.0, 100.0, 100.0, 120.0],
+        [100.0, 100.0, 90.0, 120.0],
+        [100.0, 100.0, 105.0, 120.0],
+    )
     targets = [1.0, 1.0, 0.0, 1.0]
     exits = [None, None, 90.0, None]
     stopped = run_backtest(bars, targets, "1h", Costs(0), exit_prices=exits)
     opened = run_backtest(bars, targets, "1h", Costs(0))
     # the stop converts a dip that recovered into a realized −10%
-    assert stopped.performance.final_equity == pytest.approx(0.9 * 1.2 ** 0)
+    assert stopped.performance.final_equity == pytest.approx(0.9 * 1.2**0)
     assert opened.performance.final_equity == pytest.approx(1.2)
     trade = stopped.trades[0]
     assert trade.exit_price == pytest.approx(90.0)
@@ -477,13 +532,16 @@ def test_an_intrabar_exit_is_filled_at_the_level_not_the_next_open():
 
 
 def test_the_bookkeeping_invariant_survives_an_intrabar_exit():
-    bars = _bars_with_range([100.0, 100.0, 100.0, 105.0, 130.0],
-                            [100.0, 100.0, 90.0, 105.0, 130.0],
-                            [100.0, 100.0, 105.0, 105.0, 130.0])
+    bars = _bars_with_range(
+        [100.0, 100.0, 100.0, 105.0, 130.0],
+        [100.0, 100.0, 90.0, 105.0, 130.0],
+        [100.0, 100.0, 105.0, 105.0, 130.0],
+    )
     targets = [1.0, 1.0, 0.0, 1.0, 1.0]
     exits = [None, None, 90.0, None, None]
-    result = run_backtest(bars, targets, "1h", Costs(fee_per_side=0.001),
-                                 exit_prices=exits)
+    result = run_backtest(
+        bars, targets, "1h", Costs(fee_per_side=0.001), exit_prices=exits
+    )
     compounded = 1.0
     for trade in result.trades:
         compounded *= 1.0 + trade.net_return
@@ -497,16 +555,24 @@ def test_an_exit_price_changes_the_price_without_changing_the_exposure_path():
     The *absolute* fee is smaller, because commission is charged against the account value and
     the stopped-out position is worth less by then; what is identical is the sequence.
     """
-    bars = _bars_with_range([100.0, 100.0, 100.0, 105.0], [100.0, 100.0, 90.0, 105.0],
-                            [100.0, 100.0, 105.0, 105.0])
+    bars = _bars_with_range(
+        [100.0, 100.0, 100.0, 105.0],
+        [100.0, 100.0, 90.0, 105.0],
+        [100.0, 100.0, 105.0, 105.0],
+    )
     targets = [1.0, 1.0, 0.0, 0.0]
     plain = run_backtest(bars, targets, "1h", Costs(fee_per_side=0.001))
-    level = run_backtest(bars, targets, "1h", Costs(fee_per_side=0.001),
-                         exit_prices=[None, None, 90.0, None])
+    level = run_backtest(
+        bars,
+        targets,
+        "1h",
+        Costs(fee_per_side=0.001),
+        exit_prices=[None, None, 90.0, None],
+    )
     assert [trade.direction for trade in level.trades] == [
         trade.direction for trade in plain.trades
     ]
-    assert level.fees_paid < plain.fees_paid          # a smaller account pays less
+    assert level.fees_paid < plain.fees_paid  # a smaller account pays less
     assert level.performance.final_equity < plain.performance.final_equity
 
 
@@ -522,15 +588,19 @@ def test_a_stop_is_filled_first_when_a_bar_touches_both_levels():
     strategy = get_strategy(
         "stops-sma", window=2, stop_loss=0.05, take_profit=0.05, cooldown=1
     )
-    bars = _bars_with_range([90.0, 100.0, 100.0], [90.0, 100.0, 90.0], [90.0, 100.0, 120.0])
+    bars = _bars_with_range(
+        [90.0, 100.0, 100.0], [90.0, 100.0, 90.0], [90.0, 100.0, 120.0]
+    )
     exits = strategy.intrabar_exits(bars)
-    assert exits[2] == pytest.approx(95.0)          # the stop, not the take profit at 105
+    assert exits[2] == pytest.approx(95.0)  # the stop, not the take profit at 105
 
 
 def test_a_gap_through_the_stop_fills_at_the_open():
     from ..strategies import get_strategy
 
     strategy = get_strategy("stops-sma", window=2, stop_loss=0.05, cooldown=1)
-    bars = _bars_with_range([90.0, 100.0, 80.0], [90.0, 100.0, 80.0], [90.0, 100.0, 100.0])
+    bars = _bars_with_range(
+        [90.0, 100.0, 80.0], [90.0, 100.0, 80.0], [90.0, 100.0, 100.0]
+    )
     exits = strategy.intrabar_exits(bars)
-    assert exits[2] == pytest.approx(80.0)          # worse than the 95 level
+    assert exits[2] == pytest.approx(80.0)  # worse than the 95 level
