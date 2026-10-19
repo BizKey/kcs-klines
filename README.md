@@ -369,6 +369,31 @@ It reads the Parquet on demand, so it shows new bars as the collector writes the
 chart can be exported as a single self-contained HTML file
 (`uv run kcs-dashboard --export BTC-USDT,1h --out btc.html`).
 
+## What it costs to borrow an asset
+
+`borrow-rates` (a second binary in this crate) prints the current **cross-margin borrow
+interest** for every currency KuCoin allows to be borrowed: the daily and annualised rate, the
+interest-free limit and the total borrow limit, sorted from the most expensive asset down.
+
+The currency list is public (`/api/v1/margin/config`); the rates are not — they come from the
+signed `/api/v3/margin/borrowRate`, so the key must have the **Margin (cross)** permission.
+
+```bash
+cargo build --release --bin borrow-rates
+KC_API_KEY=... KC_API_SECRET=... KC_API_PASSPHRASE=... ./target/release/borrow-rates
+# or, if you export the documented hyphenated names through env:
+env 'KC-API-KEY=...' 'KC-API-SECRET=...' 'KC-API-PASSPHRASE=...' ./target/release/borrow-rates
+```
+
+A shell cannot assign `KC-API-KEY=...` (a hyphen is not allowed in a variable name), which is
+why both spellings are read. `--min-annual-percent 5` hides the cheap assets, and
+`KC_API_BASE` points the binary at a mock or a mirror.
+
+Two things to know about the number: KuCoin quotes a **day** rate, and the annual column is the
+simple `daily × 365` (compounding hourly interest is slightly more); and borrow limits are in the
+currency itself, not in USDT. Interest is charged on the borrowed amount, so the cheapest asset
+is not always the one to short — the limit and the collateral matter too.
+
 ## Testing strategies on the collected data
 
 `analysis/` is a uv workspace member — a small Python toolkit that runs trading
